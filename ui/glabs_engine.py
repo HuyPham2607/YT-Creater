@@ -104,65 +104,120 @@ PROMPT_SELECTORS = [
     'textarea',
 ]
 
-# Từ log: text='arrow_forwardTạo' type=submit — nút cuối cùng có text "Tạo"
 SUBMIT_SELECTORS = [
-    # Chính xác nhất: button submit có text "Tạo" (kể cả khi có icon material trước)
+    # Nhắm chính xác vào icon mũi tên (arrow_forward) để tránh nhầm với nút add_2 (Thêm thành phần)
+    'button:has(i:text-is("arrow_forward"))',
+    'button:has(i:text-is("send"))',
+    'button:has-text("arrow_forwardTạo")',
     'button[type="submit"]:has-text("Tạo")',
     'button[type="submit"]:has-text("Create")',
-    'button[type="submit"]:has-text("Send")',
-    'button[type="submit"]:has-text("Gửi")',
-    # Fallback rộng hơn
-    'button:has-text("arrow_forwardTạo")',
     '[data-testid*="send"]',
     '[data-testid*="submit"]',
-    'button[aria-label*="Tạo" i]',
-    'button[aria-label*="Send" i]',
-    'button[aria-label*="Generate" i]',
 ]
 
 # Selector ảnh — scan rất rộng, lọc bằng JS sau
 IMAGE_SCAN_JS = """
 () => {
     const rows = [];
-    // Nhắm thẳng vào các container chứa lượt chat
     const turnContainers = document.querySelectorAll('div[role="article"]');
 
-    turnContainers.forEach((container, index) => {
-        const imgs = Array.from(container.querySelectorAll('img')).filter(img => img.src && !img.src.startsWith('data:image/svg'));
-        if (imgs.length === 0) return;
+    // 1. Quét theo role="article" nếu có
+    if (turnContainers.length > 0) {
+        turnContainers.forEach((container, index) => {
+            const imgs = Array.from(container.querySelectorAll('img, video')).filter(img => img.src && !img.src.startsWith('data:image/svg'));
+            const isBusy = container.querySelector('.generating, .is-generating, [aria-busy="true"], [class*="spinner"], g-progress-circular');
+            
+            let progress = 0;
+            const pctMatch = container.innerText.match(/(\d+)%/);
+            if (pctMatch) progress = parseInt(pctMatch[1]);
+            else if (isBusy) {
+                const ariaVal = isBusy.getAttribute('aria-valuenow');
+                if (ariaVal) progress = parseInt(ariaVal);
+            }
 
-        // Kiểm tra nhanh xem container này có đang 'bận' không
-        const isBusy = container.querySelector('.generating, .is-generating, [aria-busy="true"], [class*="spinner"]');
+            const readyImages = imgs.map(img => {
+                const style = window.getComputedStyle(img);
+                const w = img.naturalWidth || img.videoWidth || img.width || 0;
+                const isReady = !isBusy && parseFloat(style.opacity) > 0.9 && !style.filter.includes('blur') && w > 100;
+                return { src: img.src, isReady: isReady, tag: img.tagName.toLowerCase() };
+            });
 
-        const readyImages = imgs.map(img => {
-            const style = window.getComputedStyle(img);
-            // Ảnh sẵn sàng khi: Container không busy, opacity cao, không blur và có kích thước thật
-            const isReady = !isBusy && parseFloat(style.opacity) > 0.9 && !style.filter.includes('blur') && img.naturalWidth > 100;
-            return { src: img.src, isReady };
+            if (imgs.length === 0 && progress === 0 && !isBusy) return;
+
+            const textEl = container.querySelector('div[dir="auto"], span[jsname]');
+            let prompt = textEl ? textEl.innerText.trim() : "Hàng #" + (index + 1);
+
+            rows.push({
+                rowIndex: rows.length + 1,
+                prompt: prompt,
+                count: imgs.length,
+                images: readyImages,
+                progress: progress
+            });
         });
+    }
 
-        const textEl = container.querySelector('div[dir="auto"], span[jsname]');
-        let prompt = textEl ? textEl.innerText.trim() : "Hàng #" + (index + 1);
-
-        rows.push({
-            rowIndex: rows.length + 1,
-            prompt: prompt,
-            count: imgs.length,
-            images: readyImages
-        });
-    });
-
+    // 2. Fallback nếu UI thay đổi (không có role="article")
     if (rows.length === 0) {
-         const allImgs = Array.from(document.querySelectorAll('img')).filter(i => i.width > 50);
-         const groups = new Map();
-         allImgs.forEach(i => {
-             const p = i.closest('div[style*="grid"]') || i.parentElement.parentElement;
-             if(!groups.has(p)) groups.set(p, []);
-             groups.get(p).push({src: i.src, isReady: i.naturalWidth > 100});
-         });
-         groups.forEach((imgs, p) => {
-             rows.push({ rowIndex: rows.length+1, prompt: "Dòng tự động", count: imgs.length, images: imgs });
-         });
+        let globalProg = 0;
+        // Tìm % tiến độ từ các element có khả năng chứa nó
+        const progressEls = document.querySelectorAll('[aria-busy="true"], [class*="spinner"], [class*="progress"], [role="progressbar"], .generating, .is-generating, g-progress-circular');
+        progressEls.forEach(el => {
+            const txtMatch = el.innerText?.match(/(\d+)%/);
+            if (txtMatch) {
+                const val = parseInt(txtMatch[1]);
+                if (val > globalProg && val <= 100) globalProg = val;
+            } else {
+                 const ariaVal = el.getAttribute('aria-valuenow');
+                 if (ariaVal) {
+                     const val = parseInt(ariaVal);
+                     if (val > globalProg && val <= 100) globalProg = val;
+                 }
+            }
+        });
+        
+        // Nếu không tìm thấy bằng class, quét mù (chỉ tìm text dính %)
+        if (globalProg === 0) {
+             const allTextMatch = document.body.innerText.match(/(\d+)%/g);
+             if (allTextMatch) {
+                 allTextMatch.forEach(m => {
+                     const val = parseInt(m);
+                     if (val > globalProg && val <= 100) globalProg = val;
+                 });
+             }
+        }
+
+        const allImgs = Array.from(document.querySelectorAll('img, video')).filter(i => (i.width > 50 || i.videoWidth > 50) && !i.src.startsWith('data:image/svg'));
+        const groups = new Map();
+        allImgs.forEach(i => {
+            const p = i.closest('div[style*="grid"]') || i.parentElement.parentElement;
+            if(!groups.has(p)) groups.set(p, []);
+            const style = window.getComputedStyle(i);
+            const w = i.naturalWidth || i.videoWidth || i.width || 0;
+            const isReady = globalProg === 0 && parseFloat(style.opacity) > 0.9 && !style.filter.includes('blur') && w > 100;
+            groups.get(p).push({src: i.src, isReady: isReady, tag: i.tagName.toLowerCase()});
+        });
+
+        groups.forEach((imgs, p) => {
+            rows.push({ 
+                rowIndex: rows.length+1, 
+                prompt: "Dòng tự động", 
+                count: imgs.length, 
+                images: imgs,
+                progress: globalProg
+            });
+        });
+        
+        // Nếu không có ảnh nào nhưng có progress, trả về 1 row giả
+        if (rows.length === 0 && globalProg > 0) {
+            rows.push({
+                rowIndex: 1,
+                prompt: "Đang tạo...",
+                count: 0,
+                images: [],
+                progress: globalProg
+            });
+        }
     }
     return rows;
 }
@@ -184,7 +239,7 @@ DOWNLOAD_BTN_JS = """
 
 GET_ALL_URLS_JS = """
 () => {
-    return Array.from(document.querySelectorAll('img'))
+    return Array.from(document.querySelectorAll('img, video'))
         .map(img => img.src)
         .filter(src => src && !src.startsWith('data:image/svg'));
 }
@@ -196,13 +251,15 @@ GET_ALL_URLS_JS = """
 # ──────────────────────────────────────────────────────
 
 def find_el(page: Page, selectors: list, timeout=5000):
-    for sel in selectors:
-        try:
-            el = page.wait_for_selector(sel, timeout=timeout, state="visible")
-            if el:
-                return el, sel
-        except Exception:
-            continue
+    # Nối tất cả selector bằng dấu phẩy. Playwright sẽ tìm song song toàn bộ!
+    # Nhờ vậy không bị dính vòng lặp chờ 5s mỗi khi 1 thẻ không tồn tại.
+    combined_sel = ", ".join(selectors)
+    try:
+        el = page.wait_for_selector(combined_sel, timeout=timeout, state="visible")
+        if el:
+            return el, "combined_selector"
+    except Exception:
+        pass
     return None, None
 
 
@@ -262,7 +319,7 @@ def fill_prompt(page: Page, prompt: str, log_fn=print) -> bool:
     if not el:
         log_fn("   ❌ Không tìm thấy ô nhập!")
         return False
-    log_fn(f"   ✍️  {sel}")
+    log_fn("   ✍️  Đã gõ Prompt")
     try:
         el.click()
         time.sleep(0.3)
@@ -280,14 +337,13 @@ def fill_prompt(page: Page, prompt: str, log_fn=print) -> bool:
 
 def click_submit(page: Page, log_fn=print) -> bool:
     """
-    Ưu tiên click nút 'Tạo' (type=submit) — đã confirm từ debug log.
-    Fallback: Enter.
     """
     # Thử SUBMIT_SELECTORS trước
     el, sel = find_el(page, SUBMIT_SELECTORS, timeout=5000)
     if el:
-        log_fn(f"   🖱️  Click Submit: {sel}")
-        el.click()
+        log_fn("   🖱️  Click Submit: Đã tìm thấy nút Tạo")
+        # Sử dụng force=True phòng trường hợp thẻ span bị aria-disabled ảo khi vừa gõ xong
+        el.click(force=True)
         return True
 
     # Fallback JS: tìm button submit cuối cùng visible
@@ -314,6 +370,126 @@ def click_submit(page: Page, log_fn=print) -> bool:
     log_fn("   🖱️  Enter fallback")
     page.keyboard.press("Enter")
     return True
+
+
+def setup_flow_options(page: Page, expected_images: int, aspect_ratio: str, model: str, output_type: str, log_fn=print):
+    """
+    Tự động mở Menu cài đặt trên Web Flow và setup toàn diện.
+    """
+    log_fn(f"   ⚙️ Đang thiết lập Web: {output_type} | {expected_images} output | {aspect_ratio} | {model}...")
+    count_map = {1: "1x", 2: "x2", 3: "x3", 4: "x4"}
+    target_count = count_map.get(expected_images, "x2")
+
+    try:
+        # MỞ MENU TỶ LỆ & SỐ LƯỢNG
+        trigger_loc = page.locator('button[aria-haspopup="menu"]').filter(has_text=re.compile(r"(1x|x2|x3|x4|16:9|1:1)"))
+        
+        if trigger_loc.count() > 0:
+            trigger_loc.first.click()
+            time.sleep(0.8) # Chờ animation của Radix UI mở ra
+
+            # Chọn loại (Hình ảnh / Video)
+            if output_type:
+                type_loc = page.locator('div[role="menu"][data-state="open"] button[role="tab"]').filter(has_text=output_type)
+                if type_loc.count() > 0:
+                    type_loc.first.click(force=True)
+                    time.sleep(0.4)
+
+            # Chọn tỷ lệ
+            if aspect_ratio:
+                aspect_loc = page.locator('div[role="menu"][data-state="open"] button[role="tab"]').filter(has_text=aspect_ratio)
+                if aspect_loc.count() > 0:
+                    aspect_loc.first.click(force=True)
+                    time.sleep(0.4)
+
+            # Chọn số lượng ảnh
+            tab_loc = page.locator('div[role="menu"][data-state="open"] button[role="tab"]').filter(has_text=target_count)
+            if tab_loc.count() > 0:
+                tab_loc.first.click(force=True)
+            
+            # Đóng menu bằng phím ESC (chuẩn accessibility của Radix)
+            page.keyboard.press("Escape")
+            time.sleep(0.5)
+        else:
+            log_fn("   ⚠️ Không tìm thấy nút Cài đặt trên web (Google có thể đã đổi giao diện).")
+    except Exception as e:
+        log_fn(f"   ⚠️ Lỗi Setup Số lượng/Tỷ lệ: {e}")
+
+    try:
+        # MỞ MENU MODEL 
+        if model:
+            # --- DEBUG: Quét tất cả các nút Menu hiện có ---
+            menu_btns = page.evaluate("""() => {
+                return Array.from(document.querySelectorAll('button[aria-haspopup="menu"]')).map(b => b.textContent);
+            }""")
+            log_fn(f"   🔎 [DEBUG] Các nút Menu trên web: {menu_btns}")
+
+            # Tìm và click nút Model bằng JS (bỏ qua locator lằng nhằng của Playwright)
+            # Nút có dạng: <button aria-haspopup="menu">🍌 Nano Banana 2<i>arrow_drop_down</i></button>
+            opened = page.evaluate("""() => {
+                const btns = Array.from(document.querySelectorAll('button[aria-haspopup="menu"]'));
+                
+                // Ưu tiên tìm nút có chứa tên model đã biết
+                const knownModels = ["Nano Banana", "Imagen"];
+                let targetBtn = btns.find(b => knownModels.some(m => b.textContent.includes(m)));
+                
+                // Fallback: Tìm nút có 'arrow_drop_down' và KHÔNG chứa các chỉ số tỉ lệ/số lượng (1x, 16:9...)
+                if (!targetBtn) {
+                    targetBtn = btns.find(b => b.textContent.includes('arrow_drop_down') && !b.textContent.match(/(1x|x2|x3|x4|16:9|1:1|4:3|3:4|9:16)/));
+                }
+                
+                if (!targetBtn && btns.length > 0) targetBtn = btns[btns.length - 1]; // Fallback cuối cùng
+                
+                if (targetBtn) {
+                    targetBtn.click();
+                    return true;
+                }
+                return false;
+            }""")
+            
+            if opened:
+                time.sleep(1.0)
+
+                # --- DEBUG: ĐỌC VÀ LOG CÁC MODEL BÊN TRONG MENU ---
+                available_models = page.evaluate("""() => {
+                    const menu = document.querySelector('div[role="menu"][data-state="open"]');
+                    if (!menu) return [];
+                    const items = Array.from(menu.querySelectorAll('[role="menuitem"]'));
+                    if (items.length > 0) {
+                        return items.map(i => i.innerText.trim().replace(/\\n/g, ' '));
+                    }
+                    return Array.from(menu.querySelectorAll('span')).map(s => s.innerText.trim()).filter(t => t.length > 0);
+                }""")
+                log_fn(f"   🔎 [DEBUG] Tìm thấy các Model sau trong Dropdown: {available_models}")
+
+                # Dùng JS để ép click thẳng vào DOM của React/Radix (xuyên qua mọi lớp overlay ảo)
+                clicked = page.evaluate("""(modelName) => {
+                    const menu = document.querySelector('div[role="menu"][data-state="open"]');
+                    if (!menu) return false;
+                    
+                    // Tìm item khớp với tên Model trong tất cả thẻ văn bản
+                    const elements = Array.from(menu.querySelectorAll('[role="menuitem"], span, div'));
+                    const targetEl = elements.find(el => el.innerText && el.innerText.trim().includes(modelName));
+                    
+                    if (targetEl) {
+                        const btn = targetEl.closest('button') || targetEl.closest('[role="menuitem"]');
+                        if (btn) btn.click(); 
+                        else targetEl.click();
+                        return true;
+                    }
+                    return false;
+                }""", model)
+                
+                if not clicked:
+                    log_fn(f"   ⚠️ [DEBUG] Không thể click chọn model: {model}")
+                    page.keyboard.press("Escape")
+                else:
+                    log_fn(f"   ✅ [DEBUG] Đã thử click chọn model: {model}")
+                time.sleep(0.5)
+            else:
+                log_fn("   ⚠️ [DEBUG] Không tìm thấy nút Menu Model.")
+    except Exception as e:
+         log_fn(f"   ⚠️ Lỗi Setup Model: {e}")
 
 
 def get_all_images(page: Page, log_fn=None) -> list[dict]:
@@ -364,14 +540,18 @@ def wait_for_new_images(page: Page, before_urls: set, log_fn=print) -> list[dict
     return [img for img in current if img['src'] not in before_urls and img['isReady']]
 
 
-def save_one_image(src: str, page: Page, save_dir: str,
+def save_one_media(img_info: dict, page: Page, save_dir: str,
                    prompt: str, idx: int, log_fn=print) -> str | None:
-    """Lưu 1 ảnh từ src (data / blob / https)."""
+    """Lưu 1 ảnh hoặc video từ src (data / blob / https)."""
     try:
         os.makedirs(save_dir, exist_ok=True)
         safe  = re.sub(r'[^\w\s-]', '', prompt[:40]).strip().replace(' ', '_')
         ts    = datetime.now().strftime("%Y%m%d_%H%M%S")
-        fname = f"{ts}_{idx:02d}_{safe}.png"
+        
+        src = img_info.get('src', '')
+        tag = img_info.get('tag', 'img')
+        ext = "mp4" if tag == "video" else "png"
+        fname = f"{ts}_{idx:02d}_{safe}.{ext}"
         fpath = os.path.join(save_dir, fname)
 
         b64 = None
@@ -414,7 +594,13 @@ def run_auto(
     log_fn=print,
     stop_fn=None,
     on_image_saved=None,
-    new_project_each_run: bool = False
+    on_gen_start=None,
+    on_gen_progress=None,
+    new_project_each_run: bool = False,
+    expected_images: int = 2,
+    aspect_ratio: str = "16:9",
+    model: str = "Nano Banana 2",
+    output_type: str = "Hình ảnh"
 ) -> list[str]:
     saved = []
 
@@ -427,16 +613,41 @@ def run_auto(
         with sync_playwright() as p:
             browser = p.chromium.connect_over_cdp(CDP_ENDPOINT)
             context = browser.contexts[0]
-            page = context.new_page()
-            page.goto(FLOW_URL, wait_until="domcontentloaded", timeout=30000)
-            time.sleep(2)
+            
+            # --- TÌM TAB ĐÃ MỞ SẴN ĐỂ TÁI SỬ DỤNG ---
+            page = None
+            for existing_page in context.pages:
+                if "labs.google" in existing_page.url and "flow" in existing_page.url:
+                    page = existing_page
+                    try:
+                        page.bring_to_front() # Kéo tab đó lên màn hình cho dễ nhìn
+                    except:
+                        pass
+                    log_fn("   🔄 Sử dụng lại tab Google Labs đã mở.")
+                    break
+            
+            if not page:
+                page = context.new_page()
+                page.goto(FLOW_URL, wait_until="domcontentloaded", timeout=30000)
+                time.sleep(2)
 
-            if not enter_project(page, log_fn):
-                log_fn("❌ Không xác định được dự án.")
-                return []
+            # --- KIỂM TRA & VÀO DỰ ÁN ---
+            if new_project_each_run or "/project/" not in page.url:
+                if new_project_each_run:
+                    page.goto(FLOW_URL, wait_until="domcontentloaded", timeout=30000)
+                    time.sleep(2)
+                
+                if not enter_project(page, log_fn):
+                    log_fn("❌ Không xác định được dự án.")
+                    return []
+            else:
+                log_fn("   ✅ Tab đang ở sẵn trong dự án.")
             
             log_fn(f"🔗 URL Dự án hiện tại: {page.url}")
             time.sleep(2)
+
+            # --- TỰ ĐỘNG SETUP SỐ LƯỢNG ẢNH TRÊN WEB ---
+            setup_flow_options(page, expected_images, aspect_ratio, model, output_type, log_fn)
 
             # Vòng lặp Generate thực tế
             valid_prompts = [p.strip() for p in prompts if p.strip()]
@@ -448,8 +659,13 @@ def run_auto(
                 log_fn(f"\n{'━'*50}")
                 log_fn(f"▶  [{done}/{total}] {prompt[:70]}")
 
+                if on_gen_start: on_gen_start(prompt)
+
                 # Lấy baseline ảnh cũ: quét tuyệt đối tất cả URL hiện có
                 before_urls = set(page.evaluate(GET_ALL_URLS_JS))
+                
+                # Đếm số row hiện tại để xác định row mới phát sinh
+                before_rows_count = len(page.evaluate(IMAGE_SCAN_JS))
                 
                 log_fn(f"   📊 Đã có {len(before_urls)} ảnh trong lịch sử.")
 
@@ -461,18 +677,33 @@ def run_auto(
                 log_fn("   ⏳ Đang đợi Google sinh ảnh...")
                 new_images = []
                 timeout_at = time.time() + GEN_TIMEOUT
+                last_logged_prog = 0
                 
                 while time.time() < timeout_at:
                     current_rows = page.evaluate(IMAGE_SCAN_JS)
-                    # Tìm các ảnh có URL không nằm trong before_urls và đã isReady
                     current_new = []
-                    for r in current_rows:
+                    max_prog = 0
+
+                    for i, r in enumerate(current_rows):
+                        prog = r.get('progress', 0)
+                        # Row mới là row có index >= số row cũ, hoặc có chứa ảnh mới, hoặc có tiến độ > 0
+                        is_new_row = (i >= before_rows_count) or any(img['src'] not in before_urls for img in r['images']) or (prog > 0)
+                        
+                        if is_new_row:
+                            max_prog = max(max_prog, prog)
+                        
                         for img in r['images']:
                             if img['src'] not in before_urls and img['isReady']:
                                 current_new.append(img)
                     
-                    if len(current_new) >= 2: # Theo user nói mỗi lượt ra 2 ảnh
-                        log_fn(f"   ✅ Đã thấy {len(current_new)} ảnh mới hoàn thiện.")
+                    if on_gen_progress: on_gen_progress(max_prog)
+
+                    if max_prog > last_logged_prog:
+                        log_fn(f"   ⏳ Đang render... {max_prog}%")
+                        last_logged_prog = max_prog
+
+                    if len(current_new) >= expected_images:
+                        log_fn(f"   ✅ Đã thấy {len(current_new)}/{expected_images} kết quả mới hoàn thiện.")
                         new_images = current_new
                         break
                     time.sleep(1)
@@ -485,7 +716,7 @@ def run_auto(
 
                 # Lưu ảnh
                 for i, img in enumerate(new_images):
-                    fp = save_one_image(img['src'], page, save_dir, prompt, i+1, log_fn)
+                    fp = save_one_media(img, page, save_dir, prompt, i+1, log_fn)
                     if fp:
                         saved.append(fp)
                         if on_image_saved: on_image_saved(fp)
@@ -493,7 +724,7 @@ def run_auto(
                 if done < total: time.sleep(BETWEEN_DELAY)
 
             log_fn(f"\n🎉 HOÀN THÀNH! Đã lưu {len(saved)} ảnh mới.")
-            page.close()
+            # Không đóng tab để giữ nguyên hiện trạng cho lượt gen tiếp theo
 
     except Exception as e:
         log_fn(f"\n❌ LỖI: {e}")

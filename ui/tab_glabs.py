@@ -10,7 +10,7 @@ from PyQt6.QtWidgets import (
     QPushButton, QTextEdit, QGridLayout, QComboBox, QScrollArea,
     QFileDialog, QFrame, QSizePolicy, QCheckBox, QLayout
 )
-from PyQt6.QtCore import Qt, QThread, pyqtSignal, QRect, QPoint, QSize
+from PyQt6.QtCore import Qt, QThread, pyqtSignal, QRect, QPoint, QSize, QTimer
 from PyQt6.QtGui import QPixmap, QColor, QPalette
 
 try:
@@ -26,14 +26,20 @@ except ImportError:
 class AutoWorker(QThread):
     log_signal   = pyqtSignal(str)
     image_signal = pyqtSignal(str)
+    gen_start_signal = pyqtSignal(str)
+    gen_progress_signal = pyqtSignal(int)
     done_signal  = pyqtSignal(int)
 
-    def __init__(self, prompts, save_dir, tool, new_project):
+    def __init__(self, prompts, save_dir, tool, new_project, expected_images=2, aspect_ratio="16:9", model="Nano Banana 2", output_type="Hình ảnh"):
         super().__init__()
         self.prompts     = prompts
         self.save_dir    = save_dir
         self.tool        = tool
         self.new_project = new_project
+        self.expected_images = expected_images
+        self.aspect_ratio = aspect_ratio
+        self.model = model
+        self.output_type = output_type
         self._stop       = False
 
     def run(self):
@@ -48,12 +54,48 @@ class AutoWorker(QThread):
             log_fn               = self.log_signal.emit,
             stop_fn              = lambda: self._stop,
             on_image_saved       = self.image_signal.emit,
+            on_gen_start         = self.gen_start_signal.emit,
+            on_gen_progress      = self.gen_progress_signal.emit,
             new_project_each_run = self.new_project,
+            expected_images      = self.expected_images,
+            aspect_ratio         = self.aspect_ratio,
+            model                = self.model,
+            output_type          = self.output_type,
         )
         self.done_signal.emit(len(paths))
 
     def stop(self):
         self._stop = True
+
+
+# ──────────────────────────────────────────────────────
+# PROGRESS CARD (Khung ảnh chờ)
+# ──────────────────────────────────────────────────────
+class ProgressCard(QFrame):
+    def __init__(self, prompt: str, parent=None):
+        super().__init__(parent)
+        self.setFixedSize(156, 156)
+        self.setStyleSheet("""
+            QFrame { border: 1px dashed #5A4FCC; border-radius: 10px; background: #0C0C18; }
+        """)
+        lay = QVBoxLayout(self)
+        self.lbl_pct = QLabel("0%")
+        self.lbl_pct.setStyleSheet("font-size: 20px; font-weight: bold; color: #5A4FCC;")
+        self.lbl_pct.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        
+        self.lbl_msg = QLabel("Đang tạo...")
+        self.lbl_msg.setStyleSheet("font-size: 10px; color: #484870;")
+        self.lbl_msg.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        
+        lay.addStretch()
+        lay.addWidget(self.lbl_pct)
+        lay.addWidget(self.lbl_msg)
+        lay.addStretch()
+
+    def set_progress(self, val):
+        self.lbl_pct.setText(f"{val}%")
+        if val >= 100:
+            self.lbl_msg.setText("Đang hoàn thiện...")
 
 
 # ──────────────────────────────────────────────────────
@@ -143,6 +185,7 @@ class GLabsAutomationTab(QWidget):
     def __init__(self):
         super().__init__()
         self.worker     = None
+        self.current_prog_card = None
         self.thumb_count = 0
         self._setup_ui()
 
@@ -189,7 +232,7 @@ class GLabsAutomationTab(QWidget):
         left.addLayout(dr)
 
         # Option dự án
-        left.addWidget(self._lbl("TÙY CHỌN DỰ ÁN", "sec"))
+        left.addWidget(self._lbl("TÙY CHỌN DỰ ÁN & RENDER", "sec"))
 
         self.chk_new_proj = QCheckBox("Luôn tạo dự án mới khi bắt đầu")
         self.chk_new_proj.setObjectName("chk")
@@ -198,6 +241,32 @@ class GLabsAutomationTab(QWidget):
             "Chọn: mỗi lần nhấn Start sẽ tạo 1 dự án mới hoàn toàn"
         )
         left.addWidget(self.chk_new_proj)
+
+        opt_grid = QGridLayout()
+        opt_grid.setSpacing(10)
+        
+        lbl_type = QLabel("LOẠI OUTPUT"); lbl_type.setStyleSheet("color: #7070A0; font-size: 10px; font-weight: bold;")
+        self.cmb_type = QComboBox(); self.cmb_type.setObjectName("cmb")
+        self.cmb_type.addItems(["Hình ảnh", "Video"]); self.cmb_type.setCurrentText("Hình ảnh")
+        
+        lbl_count = QLabel("SỐ ẢNH / LƯỢT"); lbl_count.setStyleSheet("color: #7070A0; font-size: 10px; font-weight: bold;")
+        self.cmb_count = QComboBox(); self.cmb_count.setObjectName("cmb")
+        self.cmb_count.addItems(["1", "2", "3", "4"]); self.cmb_count.setCurrentText("2")
+        
+        lbl_aspect = QLabel("TỶ LỆ ẢNH"); lbl_aspect.setStyleSheet("color: #7070A0; font-size: 10px; font-weight: bold;")
+        self.cmb_aspect = QComboBox(); self.cmb_aspect.setObjectName("cmb")
+        self.cmb_aspect.addItems(["16:9", "4:3", "1:1", "3:4", "9:16"])
+        
+        lbl_model = QLabel("MÔ HÌNH AI"); lbl_model.setStyleSheet("color: #7070A0; font-size: 10px; font-weight: bold;")
+        self.cmb_model = QComboBox(); self.cmb_model.setObjectName("cmb")
+        self.cmb_model.addItems(["Nano Banana 2", "Imagen 4", "Nano Banana Pro"])
+        
+        opt_grid.addWidget(lbl_type, 0, 0); opt_grid.addWidget(self.cmb_type, 1, 0)
+        opt_grid.addWidget(lbl_count, 0, 1); opt_grid.addWidget(self.cmb_count, 1, 1)
+        opt_grid.addWidget(lbl_aspect, 0, 2); opt_grid.addWidget(self.cmb_aspect, 1, 2)
+        opt_grid.addWidget(lbl_model, 0, 3); opt_grid.addWidget(self.cmb_model, 1, 3)
+        
+        left.addLayout(opt_grid)
 
         info = QLabel(
             "ℹ  Mặc định: dùng lại dự án đã có.\n"
@@ -282,22 +351,42 @@ class GLabsAutomationTab(QWidget):
         save_dir    = self.lbl_dir.text()
         tool        = "flow" if "Flow" in self.cmb_tool.currentText() else "imagefx"
         new_project = self.chk_new_proj.isChecked()
+        img_count   = int(self.cmb_count.currentText())
+        aspect_ratio = self.cmb_aspect.currentText()
+        model       = self.cmb_model.currentText()
+        output_type = self.cmb_type.currentText()
 
         self._log(f"\n{'═'*44}")
         self._log(f"🎯 Công cụ : {self.cmb_tool.currentText()}")
         self._log(f"📁 Lưu vào: {save_dir}")
         self._log(f"📝 Prompts : {len(prompts)}")
         self._log(f"🗂  Dự án  : {'Tạo mới' if new_project else 'Dùng lại / tự động'}")
+        self._log(f"🖼️  Cấu hình: {output_type} | {img_count} lượt | {aspect_ratio} | {model}")
         self._log(f"{'═'*44}")
 
         self.btn_start.setEnabled(False); self.btn_start.setText("⏳ Đang chạy...")
         self.btn_stop.setEnabled(True)
 
-        self.worker = AutoWorker(prompts, save_dir, tool, new_project)
+        self.worker = AutoWorker(prompts, save_dir, tool, new_project, img_count, aspect_ratio, model, output_type)
         self.worker.log_signal.connect(self._log)
+        self.worker.gen_start_signal.connect(self._on_gen_start)
+        self.worker.gen_progress_signal.connect(self._on_gen_progress)
         self.worker.image_signal.connect(self._add_thumb)
         self.worker.done_signal.connect(self._done)
         self.worker.start()
+
+    def _on_gen_start(self, prompt):
+        if self.ph.isVisible(): self.ph.hide()
+        # Xoá card cũ nếu có
+        if self.current_prog_card:
+            self.current_prog_card.deleteLater()
+        self.current_prog_card = ProgressCard(prompt)
+        self.g_layout.addWidget(self.current_prog_card)
+        self.g_scroll.verticalScrollBar().setValue(self.g_scroll.verticalScrollBar().maximum())
+
+    def _on_gen_progress(self, val):
+        if self.current_prog_card:
+            self.current_prog_card.set_progress(val)
 
     def _stop(self):
         if self.worker:
@@ -305,6 +394,9 @@ class GLabsAutomationTab(QWidget):
             self._log("⏳ Đang dừng..."); self.btn_stop.setEnabled(False)
 
     def _done(self, n):
+        if self.current_prog_card:
+            self.current_prog_card.deleteLater()
+            self.current_prog_card = None
         self.btn_start.setEnabled(True); self.btn_start.setText("▶  Bắt đầu Generate")
         self.btn_stop.setEnabled(False)
         self._log(f"\n✅ Xong! Tổng: {n} ảnh.")
@@ -319,6 +411,8 @@ class GLabsAutomationTab(QWidget):
 
     def _add_thumb(self, path):
         if self.ph.isVisible(): self.ph.hide()
+        # Khi có ảnh thật về, card tiến độ sẽ tự bị đẩy đi hoặc ta có thể ẩn nó ở đây
+        # Trong luồng này, ảnh sẽ xuất hiện ngay sau card tiến độ
         self.g_layout.addWidget(ThumbCard(path))
         self.thumb_count += 1
         self.lbl_cnt.setText(f"{self.thumb_count} ảnh")

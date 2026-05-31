@@ -7,6 +7,7 @@ Traceback (most recent call last):
     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
   File "D:\YT-studio\YT-Creater\ui\tab_glabs.py", line 17, in <module>
     from .glabs_engine import run_auto
-  File "D:\YT-studio\YT-Creater\ui\glabs_engine.py", line 405
-    const r = await fetch({repr(src)});
-IndentationError: unexpected indent
+  File "D:\YT-studio\YT-Creater\ui\glabs_engine.py", line 475
+    const btn = targetEl.closest('button') || targetEl.closest('[role="menuitem"]');
+    ^^^^^^^^^
+SyntaxError: invalid syntax. Perhaps you forgot a comma?
