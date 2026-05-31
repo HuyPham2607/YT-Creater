@@ -1,0 +1,17 @@
+# Cấu hình nhạy cảm (KHÔNG ĐƯỢC ĐẨY LÊN)
+.env
+profiles.json
+
+# Thư mục Profile Chrome (Rất nặng, không cần thiết)
+ChromeGLabsProfile/
+
+# Dữ liệu tạo ra (Ảnh, video, log)
+*.png
+*.mp4
+crash_log.txt
+C:/Users/ADMIN/Downloads/GLabs/
+
+# Python
+__pycache__/
+venv/
+.vscode/

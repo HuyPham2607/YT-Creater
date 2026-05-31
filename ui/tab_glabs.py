@@ -14,7 +14,7 @@ from PyQt6.QtCore import Qt, QThread, pyqtSignal, QRect, QPoint, QSize
 from PyQt6.QtGui import QPixmap, QColor, QPalette
 
 try:
-    from glabs_engine import run_auto
+    from .glabs_engine import run_auto
     ENGINE_OK = True
 except ImportError:
     ENGINE_OK = False

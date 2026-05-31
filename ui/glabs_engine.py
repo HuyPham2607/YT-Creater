@@ -7,7 +7,7 @@ Fix dựa trên debug log thực tế:
 """
 
 from playwright.sync_api import sync_playwright, Page
-import time, os, re, base64
+import time, os, re, base64, socket, subprocess, sys
 from datetime import datetime
 from pathlib import Path
 
@@ -16,10 +16,74 @@ from pathlib import Path
 # CONFIG
 # ──────────────────────────────────────────────────────
 FLOW_URL      = "https://labs.google/fx/tools/flow"
-CDP_ENDPOINT  = "http://localhost:9222"
+CDP_ENDPOINT  = "http://127.0.0.1:9222"
 GEN_TIMEOUT   = 180
 STABLE_WAIT   = 5
-BETWEEN_DELAY = 3
+BETWEEN_DELAY = 2
+
+# ──────────────────────────────────────────────────────
+# AUTO LAUNCH CONFIG
+# ──────────────────────────────────────────────────────
+CHROME_PATHS_WINDOWS = [
+    r"C:\Program Files\Google\Chrome\Application\chrome.exe",
+    r"C:\Program Files (x86)\Google\Chrome\Application\chrome.exe",
+    os.path.expandvars(r"%LOCALAPPDATA%\Google\Chrome\Application\chrome.exe"),
+]
+PROFILE_DIR = str(Path.home() / "ChromeGLabsProfile")
+
+def is_port_open(host, port):
+    """Kiểm tra xem cổng debug đã mở chưa."""
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+        s.settimeout(1)
+        return s.connect_ex((host, port)) == 0
+
+def find_chrome_path():
+    """Tìm đường dẫn thực thi của Chrome."""
+    if sys.platform == "win32":
+        for p in CHROME_PATHS_WINDOWS:
+            if os.path.exists(p): return p
+    return None
+
+def ensure_chrome_running(log_fn):
+    """Đảm bảo Chrome đang chạy với port 9222, nếu chưa thì tự mở."""
+    if is_port_open("127.0.0.1", 9222):
+        log_fn("✅ Chrome Debug đã sẵn sàng.")
+        return True
+
+    log_fn("🌐 Chrome chưa chạy ở chế độ Debug. Đang tự động khởi động...")
+    chrome_exe = find_chrome_path()
+    
+    if not chrome_exe:
+        log_fn("❌ Không tìm thấy Chrome. Vui lòng cài đặt Chrome hoặc chạy launch_chrome.py thủ công.")
+        return False
+
+    os.makedirs(PROFILE_DIR, exist_ok=True)
+    
+    cmd = [
+        chrome_exe,
+        "--remote-debugging-port=9222",
+        "--remote-allow-origins=*",
+        f"--user-data-dir={PROFILE_DIR}",
+        "--no-first-run",
+        "--no-default-browser-check",
+        FLOW_URL
+    ]
+    
+    # Khởi động Chrome mà không đợi nó đóng (non-blocking)
+    subprocess.Popen(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    
+    # Chờ tối đa 10 giây để cổng 9222 mở
+    for _ in range(10):
+        time.sleep(1)
+        if is_port_open("127.0.0.1", 9222):
+            log_fn("✅ Chrome đã được khởi động thành công.")
+            # Cho thêm 2 giây để trang web load sơ bộ
+            time.sleep(2)
+            log_fn("⚠️  Lưu ý: Nếu đây là lần đầu, hãy đảm bảo bạn đã đăng nhập Google trên cửa sổ vừa hiện ra.")
+            return True
+            
+    log_fn("❌ Không thể kích hoạt cổng Debug của Chrome sau 10 giây.")
+    return False
 
 
 # ──────────────────────────────────────────────────────
@@ -59,34 +123,48 @@ SUBMIT_SELECTORS = [
 # Selector ảnh — scan rất rộng, lọc bằng JS sau
 IMAGE_SCAN_JS = """
 () => {
-    const results = [];
-    
-    // 1. Tất cả <img> có src thật
-    document.querySelectorAll('img').forEach(img => {
-        const src = img.src || '';
-        if (!src || src.startsWith('data:image/svg') ) return;
-        if (src.includes('spinner') || src.includes('loading')) return;
-        if (!img.offsetParent) return;  // không visible
-        const r = img.getBoundingClientRect();
-        if (r.width < 50 || r.height < 50) return;  // quá nhỏ, không phải ảnh kết quả
-        results.push({ type: 'img', src, w: r.width, h: r.height });
+    const rows = [];
+    // Nhắm thẳng vào các container chứa lượt chat
+    const turnContainers = document.querySelectorAll('div[role="article"]');
+
+    turnContainers.forEach((container, index) => {
+        const imgs = Array.from(container.querySelectorAll('img')).filter(img => img.src && !img.src.startsWith('data:image/svg'));
+        if (imgs.length === 0) return;
+
+        // Kiểm tra nhanh xem container này có đang 'bận' không
+        const isBusy = container.querySelector('.generating, .is-generating, [aria-busy="true"], [class*="spinner"]');
+
+        const readyImages = imgs.map(img => {
+            const style = window.getComputedStyle(img);
+            // Ảnh sẵn sàng khi: Container không busy, opacity cao, không blur và có kích thước thật
+            const isReady = !isBusy && parseFloat(style.opacity) > 0.9 && !style.filter.includes('blur') && img.naturalWidth > 100;
+            return { src: img.src, isReady };
+        });
+
+        const textEl = container.querySelector('div[dir="auto"], span[jsname]');
+        let prompt = textEl ? textEl.innerText.trim() : "Hàng #" + (index + 1);
+
+        rows.push({
+            rowIndex: rows.length + 1,
+            prompt: prompt,
+            count: imgs.length,
+            images: readyImages
+        });
     });
-    
-    // 2. Div có background-image (Flow đôi khi dùng kiểu này)
-    document.querySelectorAll('div, figure, section').forEach(el => {
-        const bg = window.getComputedStyle(el).backgroundImage || '';
-        if (!bg || bg === 'none') return;
-        const m = bg.match(/url\(["']?([^"')]+)["']?\)/);
-        if (!m) return;
-        const src = m[1];
-        if (src.startsWith('data:image/svg')) return;
-        if (!el.offsetParent) return;
-        const r = el.getBoundingClientRect();
-        if (r.width < 100 || r.height < 100) return;
-        results.push({ type: 'bg', src, w: r.width, h: r.height });
-    });
-    
-    return results;
+
+    if (rows.length === 0) {
+         const allImgs = Array.from(document.querySelectorAll('img')).filter(i => i.width > 50);
+         const groups = new Map();
+         allImgs.forEach(i => {
+             const p = i.closest('div[style*="grid"]') || i.parentElement.parentElement;
+             if(!groups.has(p)) groups.set(p, []);
+             groups.get(p).push({src: i.src, isReady: i.naturalWidth > 100});
+         });
+         groups.forEach((imgs, p) => {
+             rows.push({ rowIndex: rows.length+1, prompt: "Dòng tự động", count: imgs.length, images: imgs });
+         });
+    }
+    return rows;
 }
 """
 
@@ -101,6 +179,14 @@ DOWNLOAD_BTN_JS = """
         }
     });
     return btns.length;
+}
+"""
+
+GET_ALL_URLS_JS = """
+() => {
+    return Array.from(document.querySelectorAll('img'))
+        .map(img => img.src)
+        .filter(src => src && !src.startsWith('data:image/svg'));
 }
 """
 
@@ -241,118 +327,80 @@ def get_all_images(page: Page, log_fn=None) -> list[dict]:
         return []
 
 
-def wait_for_new_images(page: Page, before_count: int, log_fn=print) -> list[dict]:
-    """Chờ số ảnh tăng lên, trả về list dict {type, src, w, h}."""
-    log_fn(f"   ⏳ Chờ ảnh mới (hiện có: {before_count})...")
+def wait_for_new_images(page: Page, before_urls: set, log_fn=print) -> list[dict]:
+    """Chờ ảnh có URL mới xuất hiện và ở trạng thái Ready."""
+    log_fn(f"   ⏳ Chờ ảnh mới (đã biết: {len(before_urls)})...")
     deadline     = time.time() + GEN_TIMEOUT
-    last_total   = before_count
     stable_since = None
+    last_new_ready_count = 0
 
     while time.time() < deadline:
         current = get_all_images(page)
-        now     = len(current)
+        
+        # Lọc những ảnh có URL mới và đã Ready
+        new_ready = [img for img in current if img['src'] not in before_urls and img['isReady']]
+        now_count = len(new_ready)
 
-        if now > last_total:
-            log_fn(f"   🖼️  {now} ảnh tổng (+{now - before_count} mới)")
-            last_total   = now
-            stable_since = time.time()
+        if now_count > 0:
+            if now_count > last_new_ready_count:
+                log_fn(f"   🖼️  Đã thấy {now_count} ảnh mới sẵn sàng...")
+                last_new_ready_count = now_count
+                stable_since = time.time()
+            elif stable_since and (time.time() - stable_since) >= STABLE_WAIT:
+                log_fn(f"   ✅ Ổn định: {now_count} ảnh mới.")
+                time.sleep(2)
+                return new_ready
 
-        if stable_since and (time.time() - stable_since) >= STABLE_WAIT:
-            new_items = current[before_count:]
-            log_fn(f"   ✅ Ổn định: {len(new_items)} ảnh mới.")
-            return new_items
+        # Nếu sau một lúc vẫn chưa thấy gì mới, hoặc đang bận "generating"
+        all_new = [img for img in current if img['src'] not in before_urls]
+        if len(all_new) > now_count:
+            # Có ảnh mới nhưng chưa Ready, reset timer ổn định
+            stable_since = None
 
-        time.sleep(2)
+        time.sleep(1.5)
 
     log_fn("   ⏰ Timeout.")
-    all_imgs = get_all_images(page)
-    return all_imgs[before_count:]
+    current = get_all_images(page)
+    return [img for img in current if img['src'] not in before_urls and img['isReady']]
 
 
 def save_one_image(src: str, page: Page, save_dir: str,
                    prompt: str, idx: int, log_fn=print) -> str | None:
     """Lưu 1 ảnh từ src (data / blob / https)."""
-    os.makedirs(save_dir, exist_ok=True)
-    safe  = re.sub(r'[^\w\s-]', '', prompt[:40]).strip().replace(' ', '_')
-    ts    = datetime.now().strftime("%Y%m%d_%H%M%S")
-    fname = f"{ts}_{idx:02d}_{safe}.png"
-    fpath = os.path.join(save_dir, fname)
+    try:
+        os.makedirs(save_dir, exist_ok=True)
+        safe  = re.sub(r'[^\w\s-]', '', prompt[:40]).strip().replace(' ', '_')
+        ts    = datetime.now().strftime("%Y%m%d_%H%M%S")
+        fname = f"{ts}_{idx:02d}_{safe}.png"
+        fpath = os.path.join(save_dir, fname)
 
-    # data:image
-    if src.startswith("data:image"):
-        try:
+        b64 = None
+        if src.startswith("data:image"):
             _, b64 = src.split(",", 1)
-            Path(fpath).write_bytes(base64.b64decode(b64))
-            log_fn(f"   💾 (data) {fname}")
-            return fpath
-        except Exception as e:
-            log_fn(f"   ⚠️  data err: {e}")
-
-    # blob / https → fetch qua JS
-    if src.startswith("blob:") or src.startswith("http"):
-        try:
+        else:
             b64 = page.evaluate(f"""
                 async () => {{
-                    const r   = await fetch({repr(src)});
-                    const buf = await r.arrayBuffer();
-                    const arr = new Uint8Array(buf);
-                    let s = ''; arr.forEach(b => s += String.fromCharCode(b));
-                    return btoa(s);
+                    const r = await fetch({repr(src)});
+                    const blob = await r.blob();
+                    return new Promise((resolve) => {{
+                        const reader = new FileReader();
+                        reader.onloadend = () => resolve(reader.result.split(',')[1]);
+                        reader.readAsDataURL(blob);
+                    }});
                 }}
             """)
-            if b64:
-                Path(fpath).write_bytes(base64.b64decode(b64))
-                log_fn(f"   💾 (fetch) {fname}")
+        
+        if b64:
+            img_data = base64.b64decode(b64)
+            if len(img_data) > 10000: # Chỉ lưu nếu ảnh > 10KB (tránh ảnh trắng/icon)
+                Path(fpath).write_bytes(img_data)
+                log_fn(f"   💾 Lưu: {fname} ({len(img_data)//1024}KB)")
                 return fpath
-        except Exception as e:
-            log_fn(f"   ⚠️  fetch err: {e}")
-
-    return None
-
-
-def click_download_buttons(page: Page, save_dir: str, prompt: str,
-                            start_idx: int, log_fn=print) -> list[str]:
-    """
-    Fallback: click từng nút 'Tải xuống' → nhận file download.
-    Dùng khi fetch trực tiếp thất bại.
-    """
-    saved = []
-    os.makedirs(save_dir, exist_ok=True)
-
-    try:
-        # Tìm tất cả nút Tải xuống visible
-        btns = page.query_selector_all('button')
-        dl_btns = []
-        for btn in btns:
-            try:
-                txt = btn.text_content() or ""
-                if ("Tải xuống" in txt or "Download" in txt) and btn.is_visible():
-                    dl_btns.append(btn)
-            except Exception:
-                continue
-
-        log_fn(f"   📥 Tìm thấy {len(dl_btns)} nút Tải xuống")
-
-        for i, btn in enumerate(dl_btns):
-            try:
-                safe  = re.sub(r'[^\w\s-]', '', prompt[:40]).strip().replace(' ', '_')
-                ts    = datetime.now().strftime("%Y%m%d_%H%M%S")
-                fname = f"{ts}_{start_idx + i:02d}_{safe}.png"
-                fpath = os.path.join(save_dir, fname)
-
-                with page.expect_download(timeout=30000) as dl_info:
-                    btn.click()
-                dl_info.value.save_as(fpath)
-                log_fn(f"   💾 (dl-btn) {fname}")
-                saved.append(fpath)
-                time.sleep(0.5)
-            except Exception as e:
-                log_fn(f"   ⚠️  dl-btn #{i}: {e}")
-
+            else:
+                log_fn(f"   ⚠️ Bỏ qua ảnh lỗi (dung lượng thấp: {len(img_data)} bytes)")
     except Exception as e:
-        log_fn(f"   ⚠️  click_download_buttons: {e}")
-
-    return saved
+        log_fn(f"   ⚠️ Lỗi lưu ảnh {idx}: {e}")
+    return None
 
 
 # ──────────────────────────────────────────────────────
@@ -373,104 +421,79 @@ def run_auto(
     log_fn("\n🚀 G-Labs Engine v4...")
 
     try:
+        if not ensure_chrome_running(log_fn):
+            return []
+
         with sync_playwright() as p:
-            log_fn(f"🔗 Kết nối Chrome ({CDP_ENDPOINT})...")
             browser = p.chromium.connect_over_cdp(CDP_ENDPOINT)
             context = browser.contexts[0]
-
-            log_fn("📄 Mở tab mới...")
             page = context.new_page()
-
-            log_fn(f"🌐 {FLOW_URL}")
             page.goto(FLOW_URL, wait_until="domcontentloaded", timeout=30000)
-            page.wait_for_load_state("networkidle", timeout=20000)
             time.sleep(2)
 
-            # Vào dự án nếu cần
-            has_input = False
-            try:
-                el = page.query_selector('div[role="textbox"]')
-                has_input = el is not None and el.is_visible()
-            except Exception:
-                pass
-
-            if not has_input or new_project_each_run:
-                if not enter_project(page, log_fn):
-                    log_fn("❌ Không vào được dự án.")
-                    page.close(); return []
-            else:
-                log_fn("📌 Đang trong dự án.")
-
+            if not enter_project(page, log_fn):
+                log_fn("❌ Không xác định được dự án.")
+                return []
+            
+            log_fn(f"🔗 URL Dự án hiện tại: {page.url}")
             time.sleep(2)
 
-            # Vòng lặp
+            # Vòng lặp Generate thực tế
             valid_prompts = [p.strip() for p in prompts if p.strip()]
             total = len(valid_prompts)
 
             for done, prompt in enumerate(valid_prompts, 1):
-                if stop_fn and stop_fn():
-                    log_fn("🛑 Dừng."); break
+                if stop_fn and stop_fn(): break
 
                 log_fn(f"\n{'━'*50}")
                 log_fn(f"▶  [{done}/{total}] {prompt[:70]}")
 
-                # Đếm ảnh hiện tại
-                before_imgs = get_all_images(page)
-                before_count = len(before_imgs)
-                log_fn(f"   📊 Ảnh hiện tại trước generate: {before_count}")
+                # Lấy baseline ảnh cũ: quét tuyệt đối tất cả URL hiện có
+                before_urls = set(page.evaluate(GET_ALL_URLS_JS))
+                
+                log_fn(f"   📊 Đã có {len(before_urls)} ảnh trong lịch sử.")
 
-                # Điền prompt
-                if not fill_prompt(page, prompt, log_fn):
-                    log_fn("   ⏭️  Bỏ qua.")
-                    continue
-
-                # Chờ nút Tạo active (đôi khi cần vài giây sau khi gõ)
-                log_fn("   ⏳ Chờ nút Tạo active...")
-                time.sleep(1.5)
-
-                # Submit
-                if not click_submit(page, log_fn):
-                    log_fn("   ⏭️  Bỏ qua.")
-                    continue
+                # Gõ prompt và nhấn Tạo
+                if not fill_prompt(page, prompt, log_fn): continue
+                if not click_submit(page, log_fn): continue
 
                 # Chờ ảnh mới
-                new_items = wait_for_new_images(page, before_count, log_fn)
+                log_fn("   ⏳ Đang đợi Google sinh ảnh...")
+                new_images = []
+                timeout_at = time.time() + GEN_TIMEOUT
+                
+                while time.time() < timeout_at:
+                    current_rows = page.evaluate(IMAGE_SCAN_JS)
+                    # Tìm các ảnh có URL không nằm trong before_urls và đã isReady
+                    current_new = []
+                    for r in current_rows:
+                        for img in r['images']:
+                            if img['src'] not in before_urls and img['isReady']:
+                                current_new.append(img)
+                    
+                    if len(current_new) >= 2: # Theo user nói mỗi lượt ra 2 ảnh
+                        log_fn(f"   ✅ Đã thấy {len(current_new)} ảnh mới hoàn thiện.")
+                        new_images = current_new
+                        break
+                    time.sleep(1)
 
-                if not new_items:
-                    log_fn("   ⚠️  Không detect ảnh qua JS scan. Thử click nút Tải xuống...")
-                    dl_paths = click_download_buttons(page, save_dir, prompt, 1, log_fn)
-                    for fp in dl_paths:
-                        saved.append(fp)
-                        if on_image_saved: on_image_saved(fp)
-                    continue
+                if not new_images:
+                    log_fn("   ⚠️ Không tìm thấy ảnh mới sau khi sinh. Thử quét lại lần cuối...")
+                    # Fallback quét lại một lần nữa
+                    final_rows = page.evaluate(IMAGE_SCAN_JS)
+                    new_images = [i for r in final_rows for i in r['images'] if i['src'] not in before_urls]
 
-                # Lưu từng ảnh
-                n_saved = 0
-                for i, item in enumerate(new_items):
-                    fp = save_one_image(item['src'], page, save_dir, prompt, i+1, log_fn)
+                # Lưu ảnh
+                for i, img in enumerate(new_images):
+                    fp = save_one_image(img['src'], page, save_dir, prompt, i+1, log_fn)
                     if fp:
                         saved.append(fp)
-                        n_saved += 1
                         if on_image_saved: on_image_saved(fp)
-                    else:
-                        # fetch thất bại → fallback nút tải xuống
-                        log_fn(f"   ↩️  fetch thất bại cho ảnh #{i+1}, thử nút Tải xuống...")
 
-                if n_saved == 0:
-                    log_fn("   ↩️  Fallback: click nút Tải xuống trên trang...")
-                    dl_paths = click_download_buttons(page, save_dir, prompt, 1, log_fn)
-                    for fp in dl_paths:
-                        saved.append(fp)
-                        if on_image_saved: on_image_saved(fp)
-                else:
-                    log_fn(f"   ✨ Đã lưu {n_saved} ảnh.")
+                if done < total: time.sleep(BETWEEN_DELAY)
 
-                if done < total:
-                    time.sleep(BETWEEN_DELAY)
-
+            log_fn(f"\n🎉 HOÀN THÀNH! Đã lưu {len(saved)} ảnh mới.")
             page.close()
-            log_fn(f"\n{'═'*50}")
-            log_fn(f"🎉 XONG! {len(saved)} ảnh → {save_dir}")
 
     except Exception as e:
         log_fn(f"\n❌ LỖI: {e}")

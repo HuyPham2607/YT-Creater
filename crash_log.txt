@@ -1,8 +1,12 @@
 === LỖI HỆ THỐNG ===
 Traceback (most recent call last):
-  File "C:\newapp\main.py", line 57, in main
+  File "D:\YT-studio\YT-Creater\main.py", line 57, in main
     from ui.main_window import MainWindow
-  File "C:\newapp\ui\main_window.py", line 14, in <module>
+  File "D:\YT-studio\YT-Creater\ui\main_window.py", line 14, in <module>
     from ui.tab_glabs import GLabsAutomationTab # <--- IMPORT TAB G-LABS
     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-ImportError: cannot import name 'GLabsAutomationTab' from 'ui.tab_glabs' (C:\newapp\ui\tab_glabs.py)
+  File "D:\YT-studio\YT-Creater\ui\tab_glabs.py", line 17, in <module>
+    from .glabs_engine import run_auto
+  File "D:\YT-studio\YT-Creater\ui\glabs_engine.py", line 405
+    const r = await fetch({repr(src)});
+IndentationError: unexpected indent

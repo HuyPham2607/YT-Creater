@@ -32,7 +32,7 @@ class AIWorker(QThread):
         if api_key:
             genai.configure(api_key=api_key)
             # Dùng model gemini-1.5-flash cho tốc độ cực nhanh, hoặc gemini-1.5-pro cho suy luận sâu
-            self.model = genai.GenerativeModel('gemini-3.5-flash')
+            self.model = genai.GenerativeModel('gemini-1.5-flash')
         else:
             self.model = None
 

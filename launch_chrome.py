@@ -65,6 +65,7 @@ def launch():
     cmd = [
         chrome,
         f"--remote-debugging-port=9222",
+        "--remote-allow-origins=*",
         f"--user-data-dir={PROFILE_DIR}",
         "--no-first-run",
         "--no-default-browser-check",
@@ -83,8 +84,10 @@ def launch():
 
     proc = subprocess.Popen(cmd)
 
-    input("\nNhấn Enter khi đã đăng nhập xong trong Chrome...")
-    print("✅ Sẵn sàng! Chạy: python glabs_ui.py")
+    print("\n[!] GIỮ CỬA SỔ TERMINAL NÀY MỞ TRONG KHI DÙNG TOOL.")
+    print("    Nếu bạn đóng terminal này, Chrome sẽ mất kết nối.")
+    input("\nSau khi đăng nhập xong, nhấn Enter để xác nhận và QUAY LẠI chạy main.py...")
+    print("✅ Sẵn sàng! Bạn có thể bắt đầu sử dụng Tool 8.")
 
 
 if __name__ == "__main__":
