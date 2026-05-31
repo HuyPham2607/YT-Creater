@@ -1,0 +1,38 @@
+/* Tông màu Web: --bg:#08080D, --bg2:#0F0F18, --bg3:#171724, --border:#252535, --accent:#E8742A */
+QMainWindow, QWidget#main_content { background-color: #08080D; color: #E8E8F0; font-family: "Segoe UI", sans-serif; }
+QFrame#sidebar { background-color: #0F0F18; border-right: 1px solid #252535; }
+QLabel { color: #E8E8F0; }
+QLabel#muted { color: #606075; font-size: 12px;}
+QLabel#page_title { font-size: 20px; font-weight: bold; letter-spacing: 0.5px; }
+QLabel#page_desc { font-size: 14px; color: #606075; }
+QLabel#page_badge { color: #E8742A; background-color: rgba(232,116,42,0.1); border: 1px solid rgba(232,116,42,0.2); padding: 4px 10px; border-radius: 4px; font-weight: bold; font-size: 12px;}
+QLabel#section_label { font-size: 12px; color: #606075; font-weight: bold; text-transform: uppercase; letter-spacing: 1px; padding-left: 8px; border-left: 3px solid #E8742A; }
+
+/* Buttons */
+QPushButton#btn_primary { background-color: #E8742A; color: #000; border: none; border-radius: 8px; padding: 12px 24px; font-weight: bold; font-size: 13px; }
+QPushButton#btn_primary:hover { background-color: #FF9A50; }
+QPushButton#btn_sec { background-color: transparent; color: #E8E8F0; border: 1px solid #252535; padding: 11px 16px; border-radius: 7px; font-size: 13px; }
+QPushButton#btn_sec:hover { border-color: #E8742A; color: #E8742A; }
+
+/* Inputs */
+QLineEdit, QTextEdit, QComboBox { background-color: #0F0F18; border: 1px solid #252535; color: #E8E8F0; border-radius: 7px; padding: 9px 13px; font-size: 14px; }
+QLineEdit:focus, QTextEdit:focus, QComboBox:focus { border: 1px solid #E8742A; }
+
+/* Sidebar Navigation */
+QPushButton#nav_item { text-align: left; padding: 10px 12px; border-radius: 8px; color: #606075; font-size: 14px; border: 1px solid transparent; background-color: transparent; }
+QPushButton#nav_item:hover { background-color: #171724; color: #E8E8F0; }
+QPushButton#nav_item:checked { background-color: rgba(232,116,42,0.12); border: 1px solid rgba(232,116,42,0.25); color: #E8742A; font-weight: bold; }
+
+/* Upload Card (DropZone) */
+QFrame#upload_card { background-color: #0F0F18; border: 1px dashed #252535; border-radius: 10px; }
+QFrame#upload_card:hover { border: 1px dashed #E8742A; background-color: rgba(232,116,42,0.04); }
+
+/* Tags */
+QPushButton#tag_btn { background-color: #0F0F18; border: 1px solid #252535; color: #606075; border-radius: 15px; padding: 6px 14px; font-size: 13px; }
+QPushButton#tag_btn:hover { border-color: #E8742A; color: #E8742A; }
+QPushButton#tag_btn:checked { background-color: rgba(232,116,42,0.12); border: 1px solid #E8742A; color: #E8742A; font-weight: bold;}
+
+/* Scrollbars */
+QScrollArea { border: none; background: transparent; }
+QScrollBar:vertical { background: #08080D; width: 6px; }
+QScrollBar::handle:vertical { background: #252535; border-radius: 3px; }
