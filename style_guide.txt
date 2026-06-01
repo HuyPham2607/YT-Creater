@@ -1,0 +1,51 @@
+1. PERSONA DEFINITION
+
+Tên persona, background story (2-3 câu), 5 personality traits
+
+POV / Ngôi kể: ghi rõ ngôi kể + cách xưng hô
+
+Thang đo: Formal<->Casual, Humor, Expert<->Observer, Speed, Warmth<->Cold (mỗi thang 1-10)
+
+2. VOICE RULES
+
+DO: 5-7 rules, DON'T: 5-7 rules
+
+Sentence structure, paragraph length, rhythm pattern
+
+3. VOICE RULES BLOCK (copy-paste cho Tool 1)
+
+1 block text paste trực tiếp vào system prompt Tool 1
+
+PHẢI bao gồm POV/cách xưng hô rõ ràng
+
+4. BENCHMARK PASSAGES
+
+3 đoạn mẫu (100-150 từ): Hook, Giải thích, Dramatic moment
+
+5. FORMATTING RULES
+
+Script format, emphasis/pause markers, naming convention
+
+6. THUMBNAIL TEXT BANK
+
+HEADING BẮT BUỘC: "## 6. THUMBNAIL TEXT BANK"
+
+20 mẫu text (2-4 từ), chia theo:
+
+"#### Category: Question", "#### Category: Statement",
+
+"#### Category: Number", "#### Category: Emotion"
+
+Sub-sections BẮT BUỘC:
+
+"### Font Recommendation"
+
+"### Color Palette" - bảng có "Background | #hex" + "Accent | #hex"
+
+"### Thumbnail Composition Rules"
+
+7. CHANNEL STRATEGY
+
+Monetization roadmap, content frequency, topics nên tránh
+
+Format: Markdown. Voice Rules Block phải copy-paste ready.

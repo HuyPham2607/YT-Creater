@@ -1,0 +1,11 @@
+Dựa trên Channel DNA và Style Guide vừa tạo, tạo file CHỦ ĐỀ.
+1. TOPIC CATEGORIES — mỗi pillar tối thiểu 8 topics, mỗi topic có:
+| # | Chủ đề | Title (theo formula DNA) | Hook câu đầu |
+  Góc kể unique | Dạng | Ưu tiên |
+LƯU Ý: Title phải tuân thủ Voice Rules từ Style Guide.
+2. SERIES CONCEPTS — 3-5 brand series, mỗi series 5 episodes
+3. EVERGREEN vs TRENDING
+4. LAUNCH SEQUENCE — 8 video đầu tiên + lý do thứ tự
+5. TOPIC SCORING — 5 tiêu chí (1-10), tổng /50, xếp hạng
+6. SHARED RESEARCH MAP (nếu có nhiều kênh)
+Tạo tối thiểu 20 topics.

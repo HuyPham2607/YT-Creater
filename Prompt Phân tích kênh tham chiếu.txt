@@ -1,0 +1,33 @@
+Bạn là chuyên gia phân tích YouTube channel. Tôi muốn tạo kênh
+
+faceless YouTube mới dựa trên reference channel bên dưới.
+
+=== THÔNG TIN ĐẦU VÀO ===
+
+Reference channel: [TÊN KÊNH]
+
+Link: [LINK YOUTUBE]
+
+Subscribers: [SỐ SUB]
+
+Thị trường mục tiêu: [VÍ DỤ: Việt Nam, Đức, Quốc tế...]
+
+Ngôn ngữ kênh mới: [VÍ DỤ: Tiếng Việt]
+
+Niche: [VÍ DỤ: Dark Psychology, Philosophy, History...]
+
+Kênh này có nhân vật xuyên suốt: CÓ / KHÔNG
+
+(Nếu CÓ: mô tả sơ nhân vật — ví dụ "anh chàng da nâu đeo kính,
+
+mặc sơ mi, xuất hiện mọi video")
+
+Top 10-20 video titles (copy từ channel):
+
+[PASTE TITLES Ở ĐÂY]
+
+Mô tả thumbnail style:
+
+[MÔ TẢ HOẶC PASTE SCREENSHOT DESCRIPTION]
+
+Transcript 3-5 video (copy từ YouTube):

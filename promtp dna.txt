@@ -1,0 +1,39 @@
+Dựa trên phân tích reference VÀ lựa chọn chiến lược của tôi,
+tạo file CHANNEL DNA cho kênh mới.
+
+File này là DNA CỦA KÊNH MỚI - không phải DNA của reference.
+Lấy patterns hay từ reference, adapt cho kênh mới.
+
+=== YÊU CẦU OUTPUT ===
+
+1. TITLE PATTERNS (adapt từ reference cho kênh mới)
+- Giữ formulas hiệu quả nhất, adapt ngôn ngữ + văn hóa
+- Mỗi formula: template + 3 ví dụ title kênh mới
+- HEADING BẮT BUỘC: "### Formula A - [Tên]"...
+(Tool 5 Thumbnail tự đọc heading này)
+
+2. HOOK PATTERNS (adapt cho kênh mới)
+- Giữ hook types mạnh nhất
+- Viết 3 hook mẫu bằng ngôn ngữ kênh mới
+
+3. VIDEO STRUCTURE
+- Cấu trúc video kênh mới + transition signatures riêng
+
+4. THUMBNAIL STYLE
+- Palette mới (khác reference), typography, composition
+
+5. HUMAN TOUCH SIGNALS
+- Personality narrator (theo persona đã chọn)
+- Cách xưng hô (theo POV đã chọn)
+- Signature phrases riêng
+
+6. DIFFERENTIATION vs REFERENCE
+- Bảng so sánh: reference -> kênh mới (tối thiểu 5 điểm khác)
+
+7. PROTAGONIST IDENTITY (NHÂN VẬT CHÍNH)
+- Ngoại hình kênh mới (theo lựa chọn ở Bước 1)
+- Phụ kiện KHÔNG BAO GIỜ bỏ
+- Trang phục signature + vai trò narrative
+- Bảng so sánh nhân vật: reference -> kênh mới
+
+Format: Markdown, dùng bảng khi phù hợp.
