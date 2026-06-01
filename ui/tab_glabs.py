@@ -2,7 +2,7 @@ import sys, os, subprocess
 from PyQt6.QtWidgets import (
     QApplication, QWidget, QVBoxLayout, QHBoxLayout, QLabel,
     QPushButton, QTextEdit, QGridLayout, QComboBox, QScrollArea,
-    QFrame, QCheckBox, QLineEdit, QTableWidget, QTableWidgetItem,
+    QFrame, QCheckBox, QRadioButton, QLineEdit, QTableWidget, QTableWidgetItem,
     QHeaderView, QAbstractItemView, QFileDialog, QMessageBox
 )
 from PyQt6.QtCore import Qt, QSize, QThread, pyqtSignal
@@ -147,6 +147,9 @@ class GLabsAutomationTab(QWidget):
             QCheckBox { spacing: 8px; }
             QCheckBox::indicator { width: 16px; height: 16px; border: 1px solid #2A2A48; border-radius: 4px; background: #18182B; }
             QCheckBox::indicator:checked { background: #5A4FCC; border-color: #5A4FCC; }
+            QRadioButton { spacing: 8px; }
+            QRadioButton::indicator { width: 16px; height: 16px; border: 1px solid #2A2A48; border-radius: 8px; background: #18182B; }
+            QRadioButton::indicator:checked { background: #5A4FCC; border-color: #5A4FCC; }
             QTextEdit { background: #18182B; border: 1px solid #282840; border-radius: 8px; padding: 10px; color: #E8E8F0; }
             QPushButton#btn_blue { background: #5A4FCC; color: #FFF; border-radius: 6px; padding: 8px; font-weight: bold; }
             QPushButton#btn_run { background: #00E676; color: #000; border-radius: 8px; padding: 12px; font-weight: bold; font-size: 14px; }
@@ -200,24 +203,24 @@ class GLabsAutomationTab(QWidget):
 
         r1 = QHBoxLayout()
         v1 = QVBoxLayout(); v1.addWidget(QLabel("Model:", objectName="lbl_group"))
-        self.cmb_model = QComboBox(); self.cmb_model.addItems(["Nano Banana Pro", "Imagen 4"]); v1.addWidget(self.cmb_model)
+        self.cmb_model = QComboBox(); self.cmb_model.addItems(["Nano Banana 2", "Nano Banana Pro", "Imagen 4"]); v1.addWidget(self.cmb_model)
         
         v2 = QVBoxLayout(); v2.addWidget(QLabel("Chất lượng:", objectName="lbl_group"))
         h_qual = QHBoxLayout()
-        h_qual.addWidget(QCheckBox("1K"))
-        chk_2k = QCheckBox("2K"); chk_2k.setChecked(True)
-        h_qual.addWidget(chk_2k)
-        h_qual.addWidget(QCheckBox("4K"))
+        rad_1k = QRadioButton("1K"); rad_1k.setChecked(True)
+        h_qual.addWidget(rad_1k)
+        h_qual.addWidget(QRadioButton("2K"))
+        h_qual.addWidget(QRadioButton("4K"))
         v2.addLayout(h_qual)
         r1.addLayout(v1); r1.addLayout(v2)
         box_lay.addLayout(r1)
 
         r2 = QHBoxLayout()
         v3 = QVBoxLayout(); v3.addWidget(QLabel("Tỷ lệ ảnh:", objectName="lbl_group"))
-        self.cmb_ratio = QComboBox(); self.cmb_ratio.addItems(["16:9 Ngang", "9:16 Dọc", "1:1 Vuông"]); v3.addWidget(self.cmb_ratio)
+        self.cmb_ratio = QComboBox(); self.cmb_ratio.addItems(["16:9 Ngang", "9:16 Dọc", "1:1 Vuông", "4:3", "3:4"]); v3.addWidget(self.cmb_ratio)
         
         v4 = QVBoxLayout(); v4.addWidget(QLabel("Số lượng ảnh / prompt:", objectName="lbl_group"))
-        self.txt_amt = QLineEdit("2"); v4.addWidget(self.txt_amt)
+        self.cmb_amt = QComboBox(); self.cmb_amt.addItems(["1x", "2x", "3x", "4x"]); self.cmb_amt.setCurrentText("2x"); v4.addWidget(self.cmb_amt)
         r2.addLayout(v3); r2.addLayout(v4)
         box_lay.addLayout(r2)
 
@@ -375,7 +378,7 @@ class GLabsAutomationTab(QWidget):
         self.txt_prompts.clear()
 
         try:
-            amt = int(self.txt_amt.text())
+            amt = int(self.cmb_amt.currentText().replace("x", ""))
         except ValueError:
             amt = 2
 

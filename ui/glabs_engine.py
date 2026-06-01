@@ -97,12 +97,12 @@ SUBMIT_SELECTORS = [
 IMAGE_SCAN_JS = r"""
 () => {
     const rows = [];
-    const turnContainers = document.querySelectorAll('div[role="article"]');
+    const turnContainers = document.querySelectorAll('div[role="article"], div[data-testid="virtuoso-item-list"] > div[data-index]');
 
     if (turnContainers.length > 0) {
         turnContainers.forEach((container, index) => {
             const imgs = Array.from(container.querySelectorAll('img, video'))
-                .filter(img => img.src && !img.src.startsWith('data:image/svg'));
+                .filter(img => img.src && !img.src.startsWith('data:image/svg') && !img.src.includes('.svg') && !img.src.includes('googleusercontent.com'));
             const busyEl = container.querySelector(
                 '.generating, .is-generating, [aria-busy="true"], [class*="spinner"], g-progress-circular'
             );
@@ -121,6 +121,25 @@ IMAGE_SCAN_JS = r"""
             if (blockedCount === 0 && warningIcons.length > 0) {
                  const cTxt = (container.innerText || "").toLowerCase();
                  if (cTxt.includes('vi phạm') || cTxt.includes('không thể tạo') || cTxt.includes('violate') || cTxt.includes('chính sách')) blockedCount = warningIcons.length;
+            }
+
+            // TRÍCH XUẤT PROMPT TEXT CỦA DÒNG NÀY
+            let promptText = "Unknown Prompt";
+            const reuseBtn = container.querySelector('.reuse-prompt-button');
+            if (reuseBtn) {
+                const btnContainer = reuseBtn.parentElement;
+                if (btnContainer && btnContainer.previousElementSibling) {
+                    promptText = btnContainer.previousElementSibling.innerText.trim();
+                }
+            }
+            // Fallback nếu không tìm thấy nút reuse
+            if (promptText === "Unknown Prompt") {
+                const selectable = container.querySelector('[data-allow-text-selection="true"]');
+                if (selectable) {
+                    const firstDiv = selectable.querySelector('div > div');
+                    if (firstDiv) promptText = firstDiv.innerText.trim();
+                    else promptText = selectable.innerText.trim().split('\n')[0];
+                }
             }
 
             // Progress
@@ -149,13 +168,15 @@ IMAGE_SCAN_JS = r"""
                 images: imageData,
                 progress,
                 blockedCount,
-                isBusy: !!busyEl
+                isBusy: !!busyEl,
+                promptText: promptText
             });
         });
     }
 
     // Fallback: không có role="article"
-    if (rows.length === 0) {
+    // Chỉ dùng fallback nếu hoàn toàn không tìm thấy danh sách chứa ảnh
+    if (rows.length === 0 && document.querySelectorAll('div[data-testid="virtuoso-item-list"]').length === 0) {
         let globalProg = 0;
         const progressEls = document.querySelectorAll(
             '[aria-busy="true"], [class*="spinner"], [role="progressbar"], .generating, g-progress-circular'
@@ -165,7 +186,7 @@ IMAGE_SCAN_JS = r"""
         if (allText) allText.forEach(m => { const v = parseInt(m); if (v > globalProg && v <= 100) globalProg = v; });
 
         const allImgs = Array.from(document.querySelectorAll('img, video'))
-            .filter(i => (i.width > 50 || i.videoWidth > 50) && !i.src.startsWith('data:image/svg'));
+            .filter(i => (i.width > 50 || i.videoWidth > 50) && !i.src.startsWith('data:image/svg') && !i.src.includes('.svg') && !i.src.includes('googleusercontent.com'));
 
         if (allImgs.length > 0 || globalProg > 0) {
             rows.push({
@@ -184,7 +205,8 @@ IMAGE_SCAN_JS = r"""
                 }),
                 progress: globalProg,
                 isBusy: isBusyGlobal,
-                blockedCount: 0
+                blockedCount: 0,
+                promptText: "Unknown Prompt"
             });
         }
     }
@@ -195,7 +217,7 @@ IMAGE_SCAN_JS = r"""
 GET_ALL_URLS_JS = """
 () => Array.from(document.querySelectorAll('img, video'))
     .map(i => i.src)
-    .filter(s => s && !s.startsWith('data:image/svg'))
+    .filter(s => s && !s.startsWith('data:image/svg') && !s.includes('.svg') && !s.includes('googleusercontent.com'))
 """
 
 
@@ -310,85 +332,165 @@ def setup_flow_options(page: Page, expected_images: int, aspect_ratio: str, mode
     web_ratio = ratio_map.get(aspect_ratio, aspect_ratio)
 
     try:
-        # Bước 1: Mở panel settings
-        opened = page.evaluate("""() => {
-            const allBtns = Array.from(document.querySelectorAll('button'));
-            // Ưu tiên tìm nút chứa cả tên model và icon crop
-            let target = allBtns.find(b => {
+        # Bước 1: Tìm và Click nút Settings bằng Playwright Native Click
+        # Tìm nút có text chứa thông tin model/crop và gán cho nó 1 ID tạm thời để Playwright click chính xác
+        btn_info = page.evaluate(r"""() => {
+            const btns = Array.from(document.querySelectorAll('button')).filter(b => b.offsetParent !== null);
+            let target = btns.find(b => {
                 const txt = b.textContent || '';
-                return ['Banana', 'Imagen'].some(m => txt.includes(m)) && txt.match(/(crop_|x\d)/);
+                return (txt.includes('Banana') || txt.includes('Imagen')) && (txt.includes('crop_') || txt.includes('x'));
             });
-            // Fallback: tìm nút có icon crop và số lượng
             if (!target) {
-                target = allBtns.find(b => (b.textContent || '').match(/(crop_.*x\d|x\d.*crop_)/));
+                target = btns.find(b => b.querySelector('i.google-symbols') && (b.innerText.includes('16:9') || b.innerText.includes('Banana')));
             }
-            if (target) { target.click(); return target.textContent.trim().slice(0, 60); }
-            // Fallback cuối cùng: tìm nút có aria-haspopup
-            const popupBtns = Array.from(document.querySelectorAll('button[aria-haspopup="menu"]'));
-            if (popupBtns.length > 0) { popupBtns[popupBtns.length-1].click(); return 'fallback_popup'; }
+            
+            if (target) {
+                target.setAttribute('data-qa-settings-trigger', 'true');
+                return target.textContent.trim();
+            }
             return null;
         }""")
-        if not opened:
-            log_fn("   ⚠️ Không tìm thấy nút Settings."); return
-        log_fn(f"   ✅ Đã mở Settings panel (nút: '{opened}')")
-        time.sleep(1.0)
+
+        if btn_info:
+            # Thực hiện click thật (Native Click) - tin cậy hơn JS click
+            page.click('[data-qa-settings-trigger="true"]', delay=100)
+            log_fn(f"   🖱️ Đã click nút Settings: '{btn_info[:40]}...'")
+            
+            # Kiểm tra xem panel đã mở chưa (thường là div có role menu hoặc data-state open)
+            panel_opened = False
+            for _ in range(5):
+                time.sleep(0.5)
+                panel_opened = page.evaluate("""() => {
+                    const panel = document.querySelector('div[role="menu"][data-state="open"], div[data-test-id="settings-panel"]');
+                    if (panel) {
+                        // Đảm bảo panel đang hiển thị
+                        const style = window.getComputedStyle(panel);
+                        return style.display !== 'none' && style.visibility !== 'hidden';
+                    }
+                    return false;
+                }""")
+                if panel_opened: break
+            
+            if not panel_opened:
+                log_fn("   ⚠️ Đã click nhưng Panel Settings vẫn chưa xuất hiện."); return
+            else:
+                log_fn("   ✅ Panel Settings đã hiển thị.")
+        else:
+            log_fn("   ⚠️ Không tìm thấy nút Settings nào trên giao diện."); return
 
         # Bước 2: Loại output
         if output_type:
-            clicked = page.evaluate("""(t) => {
+            output_status = page.evaluate("""(t) => {
                 const panel = document.querySelector('div[role="menu"][data-state="open"]');
-                if (!panel) return false;
+                if (!panel) return 'not_found';
                 const tab = Array.from(panel.querySelectorAll('button[role="tab"]')).find(b => (b.innerText || b.textContent).trim().includes(t));
-                if (tab) tab.click();
-                return !!tab;
+                if (tab) {
+                    if (tab.getAttribute('aria-selected') === 'true' || tab.getAttribute('data-state') === 'active') return 'already_selected';
+                    tab.setAttribute('data-qa-output-trigger', 'true');
+                    return 'needs_click';
+                }
+                return 'not_found';
             }""", output_type);
-            time.sleep(0.4)
+            
+            if output_status == 'needs_click':
+                page.click('[data-qa-output-trigger="true"]', delay=100)
+                log_fn(f"   ✅ Đã click chọn output: {output_type}"); time.sleep(0.4)
+            elif output_status == 'already_selected':
+                log_fn(f"   ⏩ Bỏ qua output (đang ở sẵn: {output_type})")
+            else:
+                log_fn(f"   ⚠️ Không tìm thấy nút output: {output_type}")
 
-        # Bước 3: Tỷ lệ
-        ratio_clicked = page.evaluate("""(ratio) => {
+        # Bước 3: Tỷ lệ (Ratio) - Native Click
+        ratio_status = page.evaluate("""(ratio) => {
             const panel = document.querySelector('div[role="menu"][data-state="open"]');
-            if (!panel) return false;
+            if (!panel) return 'not_found';
             const tab = Array.from(panel.querySelectorAll('button[role="tab"]')).find(b => (b.innerText || b.textContent).trim().includes(ratio));
-            if (tab) { tab.click(); return true; } return false;
+            if (tab) {
+                if (tab.getAttribute('aria-selected') === 'true' || tab.getAttribute('data-state') === 'active') return 'already_selected';
+                tab.setAttribute('data-qa-ratio-trigger', 'true');
+                return 'needs_click';
+            } return 'not_found';
         }""", web_ratio)
-        if ratio_clicked:
-            log_fn(f"   ✅ Đã chọn tỷ lệ: {web_ratio}"); time.sleep(0.4)
+        
+        if ratio_status == 'needs_click':
+            page.click('[data-qa-ratio-trigger="true"]', delay=100)
+            log_fn(f"   ✅ Đã click chọn tỷ lệ: {web_ratio}"); time.sleep(0.4)
+        elif ratio_status == 'already_selected':
+            log_fn(f"   ⏩ Bỏ qua tỷ lệ (đang ở sẵn: {web_ratio})")
+        else:
+            log_fn(f"   ⚠️ Không tìm thấy nút tỷ lệ: {web_ratio}")
 
-        # Bước 4: Số lượng
-        count_clicked = page.evaluate("""(cnt) => {
+        # Bước 4: Số lượng (Quantity) - Native Click
+        count_status = page.evaluate("""(cnt) => {
             const panel = document.querySelector('div[role="menu"][data-state="open"]');
-            if (!panel) return false;
-            const tab = Array.from(panel.querySelectorAll('button[role="tab"]')).find(b => {
+            if (!panel) return 'not_found';
+            const btns = Array.from(panel.querySelectorAll('button[role="tab"]'));
+            
+            let tab = btns.find(b => {
                 const txt = (b.innerText || b.textContent).trim().toLowerCase();
                 return txt === cnt || txt === 'x' + cnt || txt === cnt + 'x';
             });
-            if (tab) { tab.click(); return true; } return false;
+            if (tab) {
+                if (tab.getAttribute('aria-selected') === 'true' || tab.getAttribute('data-state') === 'active') return 'already_selected';
+                tab.setAttribute('data-qa-qty-trigger', 'true');
+                return 'needs_click';
+            } return 'not_found';
         }""", target_count)
-        if count_clicked:
-            log_fn(f"   ✅ Đã chọn số lượng: {target_count}"); time.sleep(0.4)
+        
+        if count_status == 'needs_click':
+            page.click('[data-qa-qty-trigger="true"]', delay=100)
+            log_fn(f"   ✅ Đã click chọn số lượng: {target_count}"); time.sleep(0.4)
+        elif count_status == 'already_selected':
+            log_fn(f"   ⏩ Bỏ qua số lượng (đang ở sẵn: {target_count})")
         else:
-            log_fn(f"   ⚠️ Không click được số lượng: {target_count}")
+            log_fn(f"   ⚠️ Không tìm thấy nút số lượng: {target_count}")
 
         # Bước 5: Model dropdown bên trong panel
         if model:
-            model_dropdown_opened = page.evaluate("""() => {
+            model_status = page.evaluate("""(modelName) => {
                 const panel = document.querySelector('div[role="menu"][data-state="open"]');
-                if (!panel) return false;
-                const dropBtn = Array.from(panel.querySelectorAll('button')).find(b => b.textContent.includes('arrow_drop_down'));
-                if (dropBtn) { dropBtn.click(); return true; }
-                return false;
-            }""")
+                if (!panel) return 'not_found';
+                const btns = Array.from(panel.querySelectorAll('button'));
+                const dropBtn = btns.find(b => 
+                    b.getAttribute('aria-haspopup') === 'menu' ||
+                    b.innerText.includes('arrow_drop_down') ||
+                    (b.textContent && (b.textContent.includes('Banana') || b.textContent.includes('Imagen')))
+                );
+                if (dropBtn) {
+                    // Nếu text của nút đã hiển thị đúng model đang chọn thì bỏ qua
+                    if (dropBtn.textContent.includes(modelName)) return 'already_selected';
+                    
+                    dropBtn.setAttribute('data-qa-model-dropdown', 'true');
+                    return 'needs_click';
+                } 
+                return 'not_found';
+            }""", model)
 
-            if model_dropdown_opened:
-                time.sleep(0.8)
-                selected = page.evaluate("""(modelName) => {
-                    const opts = Array.from(document.querySelectorAll('[role="option"], [role="menuitem"], button'))
-                        .filter(b => b.offsetParent !== null && b.checkVisibility());
+            if model_status == 'already_selected':
+                log_fn(f"   ⏩ Bỏ qua model (đang ở sẵn: {model})")
+            elif model_status == 'needs_click':
+                page.click('[data-qa-model-dropdown="true"]', delay=100)
+                log_fn("   🖱️ Đã click mở dropdown Model.")
+                time.sleep(1.0) # Đợi animation mở popup
+                
+                model_found = page.evaluate("""(modelName) => {
+                    const panels = Array.from(document.querySelectorAll('[role="menu"][data-state="open"], [role="dialog"], [role="listbox"]'));
+                    const lastPanel = panels.length > 0 ? panels[panels.length - 1] : document;
+                    const opts = Array.from(lastPanel.querySelectorAll('[role="menuitem"], [role="option"]'))
+                        .filter(b => b.offsetParent !== null && b.checkVisibility()); // Chỉ lấy phần tử đang hiển thị
+                    
                     const target = opts.find(el => (el.innerText || el.textContent || '').trim().includes(modelName));
-                    if (target) { target.click(); return true; }
+                    if (target) {
+                        target.setAttribute('data-qa-model-trigger', 'true');
+                        return true;
+                    }
                     return false;
                 }""", model)
-                log_fn(f"   {'✅ Đã chọn' if selected else '⚠️ Không tìm thấy'} model: {model}")
+                if model_found:
+                    page.click('[data-qa-model-trigger="true"]', delay=100)
+                    log_fn(f"   ✅ Đã click chọn model: {model}")
+                else:
+                    log_fn(f"   ⚠️ Không click được model: {model}")
                 time.sleep(0.5)
             else:
                 log_fn("   ⚠️ Không tìm thấy dropdown model bên trong panel.")
@@ -521,6 +623,64 @@ def run_auto(
 
             setup_flow_options(page, expected_images, aspect_ratio, model, output_type, seed, log_fn)
 
+            # Quét toàn bộ lịch sử ảnh (từ đầu tới chân)
+            log_fn("   🔍 Đang cuộn ngược để quét TOÀN BỘ ảnh cũ trong dự án...")
+            all_existing_urls = set()
+            unchanged_count = 0
+            
+            for _ in range(50):  # Cuộn tối đa 50 lần
+                current_urls = set(page.evaluate(GET_ALL_URLS_JS))
+                prev_total = len(all_existing_urls)
+                all_existing_urls.update(current_urls)
+                
+                if len(all_existing_urls) > prev_total:
+                    unchanged_count = 0
+                    log_fn(f"      ...đã quét được {len(all_existing_urls)} ảnh/video")
+                else:
+                    unchanged_count += 1
+                    if unchanged_count >= 3:  # Dừng nếu 3 lần cuộn không có ảnh mới
+                        break
+                        
+                # Lệnh JS để tìm phần tử cuộn và đẩy lên trên
+                page.evaluate("""() => {
+                    const articles = document.querySelectorAll('div[role="article"], div[data-testid="virtuoso-item-list"] > div[data-index]');
+                    if (articles.length > 0) {
+                        articles[0].scrollIntoView();
+                    } else {
+                        window.scrollTo(0, 0);
+                    }
+                }""")
+                time.sleep(1.0)
+                
+            existing_urls = all_existing_urls
+            log_fn(f"   📊 [DEBUG] Quét hoàn tất! Tổng số ảnh/video cũ trong dự án là: {len(existing_urls)}.")
+            
+            # Trả lại vị trí cuộn xuống dưới cùng để chuẩn bị gõ prompt
+            page.evaluate("""() => {
+                const articles = document.querySelectorAll('div[role="article"], div[data-testid="virtuoso-item-list"] > div[data-index]');
+                if (articles.length > 0) articles[articles.length - 1].scrollIntoView();
+            }""")
+            time.sleep(1.0)
+            
+            # Debug kiểm tra cấu trúc Row theo Element mới
+            log_fn("   🔍 Đang phân tích cấu trúc các lượt tạo ảnh (Rows)...")
+            current_rows = page.evaluate(IMAGE_SCAN_JS)
+            log_fn(f"   📝 [DEBUG] Tìm thấy {len(current_rows)} lượt tạo ảnh (Rows):")
+            for r in current_rows:
+                blocked = r.get('blockedCount', 0)
+                blocked_str = f" | 🚫 Bị chặn (Policy): {blocked}" if blocked > 0 else ""
+                log_fn(f"      - Row {r.get('rowIndex')} [Prompt: '{r.get('promptText')}']: chứa {r.get('count')} ảnh{blocked_str} | Đang load: {r.get('isBusy')}")
+
+            # Quét và log ô nhập Prompt
+            log_fn("   🔍 Đang quét ô nhập Prompt...")
+            prompt_elements = page.evaluate("""() => {
+                const els = Array.from(document.querySelectorAll('textarea, [contenteditable="true"], [role="textbox"]'));
+                return els.map(e => `${e.tagName.toLowerCase()} (placeholder: "${e.getAttribute('placeholder') || ''}", role: "${e.getAttribute('role') || ''}")`);
+            }""")
+            log_fn(f"   📝 [DEBUG] Tìm thấy {len(prompt_elements)} ô nhập liệu tiềm năng:")
+            for el in prompt_elements:
+                log_fn(f"      - {el}")
+
             valid_prompts = [p.strip() for p in prompts if p.strip()]
             total = len(valid_prompts)
 
@@ -533,7 +693,6 @@ def run_auto(
 
                 # Snapshot trước khi submit
                 before_urls = set(page.evaluate(GET_ALL_URLS_JS))
-                log_fn(f"   📊 Lịch sử: {len(before_urls)} ảnh")
 
                 if not fill_prompt(page, prompt, log_fn): continue
                 if not click_submit(page, log_fn): continue
@@ -543,119 +702,64 @@ def run_auto(
                 new_images         = []
                 timeout_at         = time.time() + GEN_TIMEOUT
                 last_logged_prog   = -1
-                last_change_time   = time.time()  # reset khi progress hoặc số ảnh thay đổi
-                partial_blocked    = False
+                last_change_time   = time.time()
 
                 while time.time() < timeout_at:
                     all_rows = page.evaluate(IMAGE_SCAN_JS)
-
-                    # ── Phân loại ảnh theo before_urls ──────────────────
-                    # Một row được coi là "row mới sinh" nếu có ít nhất 1 ảnh
-                    # có src không có trong before_urls, HOẶC row đang busy/có progress
-                    strict_ready   = []  # isReady strict
-                    relaxed_ready  = []  # isReadyRelaxed
+                    
+                    strict_ready   = []
+                    relaxed_ready  = []
                     max_prog       = 0
                     any_busy       = False
-                    total_blocked  = 0      # Đếm tổng số ảnh bị chặn
+                    total_blocked  = 0
 
                     for r in all_rows:
-                        row_imgs       = r.get('images', [])
-                        row_has_new    = any(img['src'] not in before_urls for img in row_imgs)
+                        row_imgs = r.get('images', [])
+                        # Row này có chứa ảnh mới không?
+                        row_has_new = any(img['src'] not in before_urls for img in row_imgs)
                         row_in_progress = r.get('isBusy') or r.get('progress', 0) > 0
 
-                        # Chỉ xét row liên quan đến lần generate này
-                        if not row_has_new and not row_in_progress:
-                            continue
+                        if not row_has_new and not row_in_progress: continue
 
-                        if r.get('isBusy'):
-                            any_busy = True
-
+                        if r.get('isBusy'): any_busy = True
                         prog = r.get('progress', 0)
-                        if prog > max_prog:
-                            max_prog = prog
-
+                        if prog > max_prog: max_prog = prog
                         total_blocked += r.get('blockedCount', 0)
 
                         for img in row_imgs:
-                            if img['src'] in before_urls:
-                                continue
-                            if img.get('isReady'):
-                                strict_ready.append(img)
-                            if img.get('isReadyRelaxed'):
-                                relaxed_ready.append(img)
+                            if img['src'] in before_urls: continue
+                            if img.get('isReady'): strict_ready.append(img)
+                            if img.get('isReadyRelaxed'): relaxed_ready.append(img)
 
-                    # ── Cập nhật progress UI ─────────────────────────────
                     if max_prog != last_logged_prog:
-                        # Phá băng khi rớt tiến độ ngầm TOÀN BỘ (Silent Policy Block)
-                        if last_logged_prog > 10 and max_prog == 0 and not any_busy and len(relaxed_ready) == 0 and total_blocked == 0:
-                            log_fn("   ⚠️ Tiến độ rớt về 0%. Hệ thống từ chối toàn bộ nội dung (Lỗi/Policy ngầm)!")
-                            if on_gen_progress: on_gen_progress(done - 1, -1)
-                            break
-                            
                         log_fn(f"   ⏳ Đang render... {max_prog}%")
                         last_logged_prog = max_prog
                         last_change_time = time.time()
 
-                    if on_gen_progress:
-                        if total_blocked >= expected_images and not relaxed_ready:
-                            on_gen_progress(done - 1, -1)
-                        else:
-                            on_gen_progress(done - 1, max_prog)
+                    if on_gen_progress: on_gen_progress(done - 1, max_prog)
 
-                    # ── Điều kiện thoát ──────────────────────────────────
+                    # Thoát khi đủ ảnh hoặc đạt 100%
                     total_resolved = len(strict_ready) + total_blocked
-                    total_relaxed_resolved = len(relaxed_ready) + total_blocked
-
-                    # 1. Xử lý xong toàn bộ (thành công + bị chặn)
                     if total_resolved >= expected_images:
-                        if len(strict_ready) == 0:
-                            log_fn(f"   ⚠️ Toàn bộ {expected_images} ảnh đều bị chặn (Policy).")
-                            if on_gen_progress: on_gen_progress(done - 1, -1)
-                        else:
-                            log_fn(f"   ✅ Đã xử lý {total_resolved}/{expected_images} ảnh (Thành công: {len(strict_ready)}, Bị chặn: {total_blocked}).")
-                            if on_gen_progress: on_gen_progress(done - 1, 100)
-                        new_images = strict_ready
-                        break
-
-                    # 2. Đạt 100% tiến độ và không còn loading (Đề phòng chớp UI khi load giữa chừng)
-                    if (max_prog >= 100) and not any_busy and total_relaxed_resolved > 0:
-                        if len(relaxed_ready) == 0:
-                            log_fn(f"   ⚠️ Tiến trình kết thúc. Toàn bộ ảnh bị chặn.")
-                            if on_gen_progress: on_gen_progress(done - 1, -1)
-                        else:
-                            log_fn(f"   ✅ Tiến trình đạt 100%. Thu được {len(relaxed_ready)} ảnh (Bị chặn: {total_blocked}).")
-                            if on_gen_progress: on_gen_progress(done - 1, 100)
-                        new_images = strict_ready if strict_ready else relaxed_ready
-                        break
-
-                    # 3. Progress kẹt > STABLE_WAIT giây → relaxed
-                    prog_stuck = (time.time() - last_change_time) > STABLE_WAIT
-                    if prog_stuck and total_relaxed_resolved > 0:
-                        log_fn(f"   ⚠️ Progress kẹt {STABLE_WAIT}s → Lấy {len(relaxed_ready)} ảnh, {total_blocked} lỗi.")
-                        if on_gen_progress: on_gen_progress(done - 1, 100)
-                        new_images = relaxed_ready
-                        break
+                        new_images = strict_ready; break
+                    if (max_prog >= 100) and not any_busy and (len(relaxed_ready) + total_blocked > 0):
+                        new_images = strict_ready if strict_ready else relaxed_ready; break
+                    
+                    # Kẹt lâu quá thì lấy ảnh hiện có
+                    if (time.time() - last_change_time) > STABLE_WAIT and (len(relaxed_ready) + total_blocked > 0):
+                        new_images = relaxed_ready; break
 
                     time.sleep(1)
 
-                # ── Fallback cuối ────────────────────────────────────────
+                # Fallback lần cuối
                 if not new_images:
-                    log_fn("   ⚠️ Hết vòng lặp. Quét fallback lần cuối...")
                     final_rows = page.evaluate(IMAGE_SCAN_JS)
                     new_images = [
-                        img
-                        for r in final_rows
-                        for img in r.get('images', [])
+                        img for r in final_rows for img in r.get('images', [])
                         if img['src'] not in before_urls and img.get('isReadyRelaxed')
                     ]
-                    if new_images:
-                        log_fn(f"   ✅ Fallback tìm thấy {len(new_images)} ảnh.")
-                    elif partial_blocked:
-                        log_fn("   ⚠️ Tất cả ảnh trong batch bị chặn.")
-                    else:
-                        log_fn("   ⚠️ Không tìm thấy ảnh mới.")
 
-                # ── Lưu ảnh ─────────────────────────────────────────────
+                # Lưu ảnh
                 for i, img in enumerate(new_images):
                     fp = save_one_media(img, page, final_save_dir, prompt, i + 1, log_fn)
                     if fp:
