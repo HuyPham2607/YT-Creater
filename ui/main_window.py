@@ -27,7 +27,7 @@ class MainWindow(QMainWindow):
     def __init__(self):
         super().__init__()
         self.setWindowTitle("RX MEDIA - Production Suite")
-        self.resize(1280, 800)
+        self.resize(1920, 1080) # Nén chiều cao cực hạn để tránh tràn màn hình laptop khi scale 125%
 
         main_widget = QWidget()
         main_widget.setObjectName("main_content")
@@ -38,10 +38,10 @@ class MainWindow(QMainWindow):
 
         # ---------------- SIDEBAR ----------------
         self.sidebar = QFrame()
-        self.sidebar.setFixedWidth(250)
+        self.sidebar.setFixedWidth(170) # Thu hẹp sidebar tối đa
         self.sidebar.setObjectName("sidebar")
         sidebar_layout = QVBoxLayout(self.sidebar)
-        sidebar_layout.setContentsMargins(16, 24, 16, 24)
+        sidebar_layout.setContentsMargins(8, 10, 8, 10) # Nén lề sidebar
 
         logo_layout = QHBoxLayout()
         lbl_logo = QLabel("RX")
@@ -53,7 +53,7 @@ class MainWindow(QMainWindow):
         logo_layout.addStretch()
         sidebar_layout.addLayout(logo_layout)
 
-        sidebar_layout.addSpacing(24)
+        sidebar_layout.addSpacing(4) # Nén spacing logo
         sidebar_layout.addWidget(QLabel("PROJECT", styleSheet="font-size: 10px; color: #606075; font-weight: bold; letter-spacing: 1px;"))
         btn_proj = QPushButton("— No project —")
         btn_proj.setStyleSheet("background: #171724; border: 1px solid #252535; color: #E8742A; padding: 8px; border-radius: 8px; text-align: left; padding-left: 12px;")

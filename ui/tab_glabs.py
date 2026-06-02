@@ -164,15 +164,15 @@ class GLabsAutomationTab(QWidget):
         """)
 
         main_lay = QHBoxLayout(self)
-        main_lay.setContentsMargins(16, 16, 16, 16)
-        main_lay.setSpacing(16)
+        main_lay.setContentsMargins(16, 12, 16, 12)
+        main_lay.setSpacing(12)
 
         # LEFT PANEL
         left_panel = QFrame()
-        left_panel.setFixedWidth(360)
+        left_panel.setFixedWidth(280) # Thu hẹp panel điều khiển bên trái
         left_lay = QVBoxLayout(left_panel)
         left_lay.setContentsMargins(0, 0, 0, 0)
-        left_lay.setSpacing(12)
+        left_lay.setSpacing(8)
 
         title_lay = QHBoxLayout()
         v_title = QVBoxLayout()

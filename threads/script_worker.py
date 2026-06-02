@@ -1,6 +1,10 @@
 import os
-from google import genai
-from google.genai import types
+try:
+    from google import genai
+    from google.genai import types
+except ImportError:
+    genai = None
+    types = None
 from dotenv import load_dotenv
 from PyQt6.QtCore import QThread, pyqtSignal
 
@@ -16,6 +20,11 @@ class ScriptWorker(QThread):
         self.config = config
 
     def run(self):
+        if genai is None:
+            self.result_signal.emit("❌ LỖI: Thư viện 'google-genai' chưa được cài đặt.")
+            self.finished_signal.emit()
+            return
+            
         api_key = os.getenv("GEMINI_API_KEY")
         if not api_key:
             self.result_signal.emit("❌ LỖI NGHIÊM TRỌNG: Không tìm thấy GEMINI_API_KEY trong file .env!")
@@ -23,7 +32,7 @@ class ScriptWorker(QThread):
             return
 
         client = genai.Client(api_key=api_key)
-        model_name = 'gemini-3.5-flash'
+        model_name = 'gemini-1.5-flash'
 
         try:
             self.progress_signal.emit("✍️ Gemini đang cày kịch bản chi tiết...")

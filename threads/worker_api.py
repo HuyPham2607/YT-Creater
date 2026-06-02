@@ -1,6 +1,9 @@
 import time
 import os
-from google import genai
+try:
+    from google import genai
+except ImportError:
+    genai = None
 from dotenv import load_dotenv
 from PyQt6.QtCore import QThread, pyqtSignal
 
@@ -29,9 +32,9 @@ class AIWorker(QThread):
         
         # Cấu hình Gemini API
         api_key = os.getenv("GEMINI_API_KEY")
-        if api_key:
+        if api_key and genai:
             self.client = genai.Client(api_key=api_key)
-            self.model_name = 'gemini-3.5-flash'
+            self.model_name = 'gemini-1.5-flash'
         else:
             self.client = None
 

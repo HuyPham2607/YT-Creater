@@ -1,13 +1,14 @@
 === LỖI HỆ THỐNG ===
 Traceback (most recent call last):
-  File "D:\YT-studio\YT-Creater\main.py", line 57, in main
-    from ui.main_window import MainWindow
-  File "D:\YT-studio\YT-Creater\ui\main_window.py", line 14, in <module>
-    from ui.tab_glabs import GLabsAutomationTab # <--- IMPORT TAB G-LABS
-    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-  File "D:\YT-studio\YT-Creater\ui\tab_glabs.py", line 13, in <module>
-    from .glabs_engine import run_auto
-  File "D:\YT-studio\YT-Creater\ui\glabs_engine.py", line 640
-    log_fn("   🔎 [DEBUG] Chi tiết các URL tìm thấy và đang tiến hành tải về để bạn kiểm tra:")
-    ^^^^^^
-IndentationError: expected an indented block after 'for' statement on line 639
+  File "D:\YT-studio\YT-Creater\main.py", line 62, in main
+    window = MainWindow()
+             ^^^^^^^^^^^^
+  File "D:\YT-studio\YT-Creater\ui\main_window.py", line 134, in __init__
+    self.content_area.addWidget(GLabsAutomationTab())     # Index 8
+                                ^^^^^^^^^^^^^^^^^^^^
+  File "D:\YT-studio\YT-Creater\ui\tab_glabs.py", line 130, in __init__
+    self._setup_ui()
+  File "D:\YT-studio\YT-Creater\ui\tab_glabs.py", line 178, in _setup_ui
+    v_title.setSpacing(0)
+    ^^^^^^^
+NameError: name 'v_title' is not defined

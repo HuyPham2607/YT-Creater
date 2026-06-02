@@ -4,9 +4,9 @@ from PyQt6.QtWidgets import (QWidget, QVBoxLayout, QHBoxLayout, QLabel,
 class VideoMetadataTab(QWidget):
     def __init__(self):
         super().__init__()
-        main_lay = QVBoxLayout(self); main_lay.setContentsMargins(32, 32, 32, 32)
+        main_lay = QVBoxLayout(self); main_lay.setContentsMargins(15, 15, 15, 15) # Giảm lề
         
-        header = QHBoxLayout(); header.setContentsMargins(0,0,0,20)
+        header = QHBoxLayout(); header.setContentsMargins(0,0,0,15)
         vbox = QVBoxLayout(); vbox.addWidget(QLabel("Video Metadata (SEO)", objectName="page_title"))
         vbox.addWidget(QLabel("Phân tích kịch bản hoàn chỉnh để xuất Tiêu đề, Description, Timestamps & Tags", objectName="page_desc"))
         header.addLayout(vbox); header.addStretch(); header.addWidget(QLabel("Tool 6", objectName="page_badge"))

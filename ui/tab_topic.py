@@ -151,12 +151,13 @@ class TopicIdeatorTab(QWidget):
     def __init__(self):
         super().__init__()
         main_lay = QVBoxLayout(self)
-        main_lay.setContentsMargins(32, 32, 32, 32)
+        main_lay.setContentsMargins(15, 5, 15, 5) # Nén lề dọc
         
         # --- CSS TỔNG THỂ ---
         self.setStyleSheet("""
-            QLabel#page_title { font-size: 26px; font-weight: bold; color: #E8E8F0; }
-            QLabel#page_desc { font-size: 14px; color: #606075; margin-bottom: 10px;}
+            TopicIdeatorTab { background-color: #08080D; }
+            QLabel#page_title { font-size: 20px; font-weight: bold; color: #E8E8F0; }
+            QLabel#page_desc { font-size: 12px; color: #606075; margin-bottom: 5px;}
             QLabel#section_label { font-size: 11px; font-weight: bold; color: #5A5A7A; letter-spacing: 1px; text-transform: uppercase; margin-top: 10px; margin-bottom: 5px; }
             QLabel#muted { color: #8A8AA0; font-size: 12px; font-weight: bold; margin-bottom: 2px; }
             QPushButton#tag_btn { background: #18182B; border: 1px solid #282840; border-radius: 16px; padding: 6px 14px; color: #A0A0C0; }
@@ -184,7 +185,7 @@ class TopicIdeatorTab(QWidget):
         scroll.setStyleSheet("QScrollArea { border: none; background: transparent; }")
         widget = QWidget()
         lay = QVBoxLayout(widget)
-        lay.setSpacing(20)
+        lay.setSpacing(8) # Giảm spacing
 
         # DATA
         self.style_content = ""

@@ -7,13 +7,13 @@ class AssetPromptsTab(QWidget):
     def __init__(self):
         super().__init__()
         main_lay = QVBoxLayout(self)
-        main_lay.setContentsMargins(32, 32, 32, 32)
+        main_lay.setContentsMargins(15, 2, 15, 2)
         
         # ==========================================
         # 1. HEADER
         # ==========================================
         header = QHBoxLayout()
-        header.setContentsMargins(0, 0, 0, 20)
+        header.setContentsMargins(0, 0, 0, 2)
         vbox_h = QVBoxLayout()
         
         lbl_title = QLabel("Asset Prompt Generator")
@@ -40,7 +40,7 @@ class AssetPromptsTab(QWidget):
         scroll.setWidgetResizable(True)
         widget = QWidget()
         lay = QVBoxLayout(widget)
-        lay.setSpacing(20)
+        lay.setSpacing(4)
 
         # --- WORKFLOW HINT ---
         hint_text = ("💡 <b>KHI NÀO DÙNG Tool 3?</b> Chỉ dùng khi setup kênh mới - tạo reference sheets cho nhân vật và bối cảnh. "
@@ -74,7 +74,7 @@ class AssetPromptsTab(QWidget):
         lay.addWidget(QLabel("STYLE DESCRIPTION (MÔ TẢ VISUAL MASCOT - MÀU, ĐẶC TRƯNG, ART STYLE)", objectName="muted"))
         self.txt_mascot_style = QTextEdit()
         self.txt_mascot_style.setPlaceholderText("Hand-drawn 2D cartoon goat character...")
-        self.txt_mascot_style.setFixedHeight(60)
+        self.txt_mascot_style.setFixedHeight(40)
         lay.addWidget(self.txt_mascot_style)
 
         mascot_btns = QHBoxLayout()
@@ -128,7 +128,7 @@ class AssetPromptsTab(QWidget):
         self.txt_char_style = QTextEdit()
         self.txt_char_style.setText("2D cartoon character, bold thick black ink outlines, perfectly round WHITE circle head (pure white, NOT skin-colored), small simple black dot eyes, thin simple eyebrow lines...")
         self.txt_char_style.setStyleSheet("color: #3AD68A;") # Chữ màu xanh lá
-        self.txt_char_style.setFixedHeight(100)
+        self.txt_char_style.setFixedHeight(60)
         v_char.addWidget(self.txt_char_style)
         style_body.addLayout(v_char)
 
@@ -137,7 +137,7 @@ class AssetPromptsTab(QWidget):
         self.txt_bg_style = QTextEdit()
         self.txt_bg_style.setText("2D cartoon background illustration, bold black outlines, detailed interior or exterior environment with depth and atmosphere, muted dark color palette browns grays...")
         self.txt_bg_style.setStyleSheet("color: #5A9BFF;") # Chữ màu xanh dương
-        self.txt_bg_style.setFixedHeight(100)
+        self.txt_bg_style.setFixedHeight(60)
         v_bg.addWidget(self.txt_bg_style)
         style_body.addLayout(v_bg)
         
@@ -160,7 +160,7 @@ class AssetPromptsTab(QWidget):
         l_char.addWidget(QLabel("🔴 CHARACTERS", objectName="section_label"))
         self.txt_characters = QTextEdit("agent-young\nagent-corrupted\nharmon-boss")
         self.txt_characters.setStyleSheet("border: none; background: transparent; font-family: 'Space Mono', monospace; color: #E8E8F0;")
-        self.txt_characters.setFixedHeight(100)
+        self.txt_characters.setFixedHeight(70)
         l_char.addWidget(self.txt_characters)
         lists_lay.addWidget(box_char)
 
@@ -171,7 +171,7 @@ class AssetPromptsTab(QWidget):
         l_bg.addWidget(QLabel("🔵 BACKGROUNDS", objectName="section_label"))
         self.txt_backgrounds = QTextEdit("fbi-office-clean\ndark-office-night\nhome-kitchen")
         self.txt_backgrounds.setStyleSheet("border: none; background: transparent; font-family: 'Space Mono', monospace; color: #E8E8F0;")
-        self.txt_backgrounds.setFixedHeight(100)
+        self.txt_backgrounds.setFixedHeight(70)
         l_bg.addWidget(self.txt_backgrounds)
         lists_lay.addWidget(box_bg)
 

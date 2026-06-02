@@ -2,7 +2,10 @@ import os
 import time
 import json
 import re
-from google import genai
+try:
+    from google import genai
+except ImportError:
+    genai = None
 from dotenv import load_dotenv
 from PyQt6.QtCore import QThread, pyqtSignal
 
@@ -17,6 +20,11 @@ class TopicWorker(QThread):
         self.config = config
 
     def run(self):
+        if genai is None:
+            self.result_signal.emit("❌ LỖI: Thư viện 'google-genai' chưa được cài đặt. Vui lòng chạy lệnh 'pip install google-genai' trong terminal.")
+            self.finished_signal.emit()
+            return
+
         api_key = os.getenv("GEMINI_API_KEY")
         if not api_key:
             self.result_signal.emit("❌ LỖI: Không tìm thấy GEMINI_API_KEY trong file .env!")
@@ -80,8 +88,8 @@ REQUIRED JSON FORMAT:
 
             # Danh sách các model theo thứ tự ưu tiên (Fallback Chain)
             model_priority = [
-                "models/gemini-3.5-flash",
-                "models/gemini-3.1-flash-lite"
+                "gemini-1.5-flash",
+                "gemini-1.5-flash-lite"
             ]
 
             last_error = ""

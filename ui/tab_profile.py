@@ -16,7 +16,7 @@ class ProfileDialog(QDialog):
     def __init__(self, parent=None):
         super().__init__(parent)
         self.setWindowTitle("Tạo Profile mới")
-        self.resize(850, 700)
+        self.resize(750, 480) # Giảm chiều cao popup tối đa
         
         self.setStyleSheet("""
             QDialog { background-color: #0F0F18; border: 1px solid #252535; }
@@ -205,11 +205,11 @@ class ProfileCard(QFrame):
             QFrame#profile_card { background: #0F0F18; border: 1px solid #252535; border-radius: 12px; }
             QFrame#profile_card:hover { border: 1px solid #E8742A; background: rgba(232,116,42,0.02); }
         """)
-        self.setFixedWidth(380)
+        self.setFixedWidth(290) # Thu nhỏ card thêm nữa để vừa 3 cột trên màn hình laptop
 
         lay = QVBoxLayout(self)
-        lay.setContentsMargins(20, 20, 20, 20)
-        lay.setSpacing(16)
+        lay.setContentsMargins(15, 15, 15, 15)
+        lay.setSpacing(12)
 
         lbl_title = QLabel(data.get("name", "Unknown Profile"))
         lbl_title.setStyleSheet("font-size: 18px; font-weight: bold; color: #E8E8F0;")
@@ -261,10 +261,10 @@ class ProfileManagerTab(QWidget):
         self.profiles = []
         
         main_lay = QVBoxLayout(self)
-        main_lay.setContentsMargins(32, 32, 32, 32)
+        main_lay.setContentsMargins(15, 15, 15, 15) # Giảm lề
 
         header = QHBoxLayout()
-        header.setContentsMargins(0, 0, 0, 20)
+        header.setContentsMargins(0, 0, 0, 15)
         
         vbox_h = QVBoxLayout()
         vbox_h.setSpacing(4)
@@ -290,7 +290,7 @@ class ProfileManagerTab(QWidget):
         lay.setContentsMargins(0, 0, 0, 0)
 
         self.grid_cards = QGridLayout()
-        self.grid_cards.setSpacing(24)
+        self.grid_cards.setSpacing(16) # Giảm khoảng cách giữa các card
         lay.addLayout(self.grid_cards)
         lay.addStretch()
 

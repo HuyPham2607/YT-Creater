@@ -10,15 +10,15 @@ class ScriptWriterTab(QWidget):
     def __init__(self):
         super().__init__()
         main_lay = QVBoxLayout(self)
-        main_lay.setContentsMargins(32, 32, 32, 32)
+        main_lay.setContentsMargins(10, 0, 10, 0) # Xóa lề dọc để tiết kiệm không gian
         
         # ==========================================
         # 1. HEADER
         # ==========================================
         header = QHBoxLayout()
-        header.setContentsMargins(0, 0, 0, 20)
+        header.setContentsMargins(0, 0, 0, 0)
         vbox_h = QVBoxLayout()
-        vbox_h.setSpacing(4)
+        vbox_h.setSpacing(0)
         vbox_h.addWidget(QLabel("Script Writer", objectName="page_title"))
         vbox_h.addWidget(QLabel("Upload Style Guide + DNA + Chủ Đề → Generate full script theo đúng DNA kênh", objectName="page_desc"))
         header.addLayout(vbox_h)
@@ -33,7 +33,7 @@ class ScriptWriterTab(QWidget):
         scroll.setWidgetResizable(True)
         widget = QWidget()
         lay = QVBoxLayout(widget)
-        lay.setSpacing(20)
+        lay.setSpacing(2) # Nén khoảng cách giữa các hàng cực hạn
 
         # --- CONTEXT FILES ---
         self.style_content = ""
@@ -116,7 +116,7 @@ class ScriptWriterTab(QWidget):
         lay.addWidget(QLabel("AI MODEL", objectName="section_label"))
         self.cmb_ai = QComboBox()
         self.cmb_ai.addItems(["Claude 3.5 Sonnet", "Gemini 1.5 Pro"])
-        self.cmb_ai.setMinimumWidth(300) # Giữ cho combobox AI ngắn lại giống giao diện web
+        self.cmb_ai.setFixedWidth(220) # Thu nhỏ chiều rộng combobox
         
         ai_lay = QHBoxLayout()
         ai_lay.addWidget(self.cmb_ai)
@@ -127,7 +127,7 @@ class ScriptWriterTab(QWidget):
         lay.addWidget(QLabel("CONTEXT BỔ SUNG (OPTIONAL)", objectName="section_label"))
         self.txt_extra = QTextEdit()
         self.txt_extra.setPlaceholderText("Nhân vật, bối cảnh, twist muốn có, tone cụ thể...\n\nTip: Nếu chọn Auto structure, Claude sẽ tự quyết định số phần và tên từng phần phù hợp nhất với topic.")
-        self.txt_extra.setMinimumHeight(100)
+        self.txt_extra.setMinimumHeight(40) # Thu nhỏ ô context
         lay.addWidget(self.txt_extra)
 
         # --- TOKEN COUNTER ---
@@ -168,13 +168,13 @@ class ScriptWriterTab(QWidget):
         lay.addLayout(status_lay)
 
         self.btn_generate = QPushButton("✍️ VIẾT KỊCH BẢN", objectName="btn_primary")
-        self.btn_generate.setFixedHeight(50)
+        self.btn_generate.setFixedHeight(35) # Giảm chiều cao nút bấm chính
         self.btn_generate.clicked.connect(self._generate_script)
         lay.addWidget(self.btn_generate)
 
         self.txt_output = QTextEdit()
         self.txt_output.setPlaceholderText("Kịch bản hoàn chỉnh sẽ hiển thị ở đây. Bạn có thể chỉnh sửa trực tiếp...")
-        self.txt_output.setMinimumHeight(400)
+        self.txt_output.setMinimumHeight(60) # Ép thanh cuộn hoạt động sớm hơn
         self.txt_output.setStyleSheet("font-size: 15px; line-height: 1.6;")
         lay.addWidget(self.txt_output)
 
