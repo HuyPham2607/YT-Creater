@@ -1,5 +1,6 @@
 PyQt6
-google-generativeai
+google-genai
+google-auth==2.41.0
 python-dotenv
 python-docx
 playwright

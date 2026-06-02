@@ -714,6 +714,16 @@ def run_auto(
                     total_blocked  = 0
 
                     for r in all_rows:
+                        row_prompt = r.get('promptText', 'Unknown Prompt')
+                        
+                        # [FIX] Lọc chéo: Bỏ qua các row của prompt cũ đang render ngầm (ví dụ "gojo")
+                        if row_prompt != "Unknown Prompt":
+                            rp_clean = re.sub(r'\s+', ' ', row_prompt.strip().lower())
+                            curr_clean = re.sub(r'\s+', ' ', prompt.strip().lower())
+                            # Nếu text không khớp, bỏ qua row này hoàn toàn
+                            if rp_clean != curr_clean and not rp_clean.startswith(curr_clean) and not curr_clean.startswith(rp_clean):
+                                continue
+
                         row_imgs = r.get('images', [])
                         # Row này có chứa ảnh mới không?
                         row_has_new = any(img['src'] not in before_urls for img in row_imgs)
@@ -754,10 +764,17 @@ def run_auto(
                 # Fallback lần cuối
                 if not new_images:
                     final_rows = page.evaluate(IMAGE_SCAN_JS)
-                    new_images = [
-                        img for r in final_rows for img in r.get('images', [])
-                        if img['src'] not in before_urls and img.get('isReadyRelaxed')
-                    ]
+                    for r in final_rows:
+                        row_prompt = r.get('promptText', 'Unknown Prompt')
+                        if row_prompt != "Unknown Prompt":
+                            rp_clean = re.sub(r'\s+', ' ', row_prompt.strip().lower())
+                            curr_clean = re.sub(r'\s+', ' ', prompt.strip().lower())
+                            if rp_clean != curr_clean and not rp_clean.startswith(curr_clean) and not curr_clean.startswith(rp_clean):
+                                continue
+                        new_images.extend([
+                            img for img in r.get('images', [])
+                            if img['src'] not in before_urls and img.get('isReadyRelaxed')
+                        ])
 
                 # Lưu ảnh
                 for i, img in enumerate(new_images):
