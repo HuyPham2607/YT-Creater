@@ -1,414 +1,518 @@
-"""
-glabs_ui.py — G-Labs Auto Generator UI v2
-Giao diện PyQt6 tích hợp glabs_engine.py v2
-"""
-
-import sys, os
-from pathlib import Path
+import sys, os, subprocess
 from PyQt6.QtWidgets import (
     QApplication, QWidget, QVBoxLayout, QHBoxLayout, QLabel,
     QPushButton, QTextEdit, QGridLayout, QComboBox, QScrollArea,
-    QFileDialog, QFrame, QSizePolicy, QCheckBox, QLayout
+    QFrame, QCheckBox, QRadioButton, QLineEdit, QTableWidget, QTableWidgetItem,
+    QHeaderView, QAbstractItemView, QFileDialog, QMessageBox
 )
-from PyQt6.QtCore import Qt, QThread, pyqtSignal, QRect, QPoint, QSize
-from PyQt6.QtGui import QPixmap, QColor, QPalette
+from PyQt6.QtCore import Qt, QSize, QThread, pyqtSignal
+from PyQt6.QtGui import QIcon, QColor, QPixmap
 
+# Giả lập import Engine
 try:
-    from glabs_engine import run_auto
+    from .glabs_engine import run_auto
     ENGINE_OK = True
 except ImportError:
     ENGINE_OK = False
 
-
-# ──────────────────────────────────────────────────────
-# WORKER THREAD
-# ──────────────────────────────────────────────────────
-class AutoWorker(QThread):
-    log_signal   = pyqtSignal(str)
-    image_signal = pyqtSignal(str)
-    done_signal  = pyqtSignal(int)
-
-    def __init__(self, prompts, save_dir, tool, new_project):
-        super().__init__()
-        self.prompts     = prompts
-        self.save_dir    = save_dir
-        self.tool        = tool
-        self.new_project = new_project
-        self._stop       = False
-
-    def run(self):
-        if not ENGINE_OK:
-            self.log_signal.emit("❌ Không tìm thấy glabs_engine.py!")
-            self.done_signal.emit(0)
-            return
-        paths = run_auto(
-            prompts              = self.prompts,
-            save_dir             = self.save_dir,
-            tool                 = self.tool,
-            log_fn               = self.log_signal.emit,
-            stop_fn              = lambda: self._stop,
-            on_image_saved       = self.image_signal.emit,
-            new_project_each_run = self.new_project,
-        )
-        self.done_signal.emit(len(paths))
-
-    def stop(self):
-        self._stop = True
-
-
-# ──────────────────────────────────────────────────────
-# THUMBNAIL
-# ──────────────────────────────────────────────────────
-class ThumbCard(QFrame):
-    def __init__(self, img_path: str, parent=None):
+# =======================================================
+# COMPONENT: Cột Ảnh Tham Chiếu
+# =======================================================
+class RefImageGrid(QWidget):
+    def __init__(self, parent=None):
         super().__init__(parent)
-        self.img_path = img_path
-        self.setFixedSize(156, 156)
-        self.setCursor(Qt.CursorShape.PointingHandCursor)
-        self.setToolTip(os.path.basename(img_path))
-        self.setStyleSheet("""
-            QFrame { border: 1px solid #1E1E2E; border-radius: 10px; background: #0C0C18; }
-            QFrame:hover { border-color: #5A4FCC; }
+        layout = QHBoxLayout(self)
+        layout.setContentsMargins(10, 0, 10, 0)
+        
+        self.btn_add = QPushButton("Thêm ảnh")
+        self.btn_add.setFixedSize(80, 32)
+        self.btn_add.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.btn_add.setStyleSheet("""
+            QPushButton { background: transparent; color: #8A8AA0; border: 1px solid #2A2A48; border-radius: 6px; font-weight: bold;}
+            QPushButton:hover { border-color: #5A4FCC; color: #A0A0D0; background: #1B1B30; }
         """)
-        lay = QVBoxLayout(self)
-        lay.setContentsMargins(3, 3, 3, 3)
-        lbl = QLabel()
-        pix = QPixmap(img_path)
-        if pix.isNull():
-            pix = QPixmap(150, 150); pix.fill(QColor("#161628"))
-        else:
-            pix = pix.scaled(150, 150,
-                Qt.AspectRatioMode.KeepAspectRatio,
-                Qt.TransformationMode.SmoothTransformation)
-        lbl.setPixmap(pix)
-        lbl.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        lay.addWidget(lbl)
+        
+        layout.addWidget(self.btn_add, alignment=Qt.AlignmentFlag.AlignCenter)
 
-    def mouseDoubleClickEvent(self, _):
-        import subprocess, platform
-        if platform.system() == "Windows":   os.startfile(self.img_path)
-        elif platform.system() == "Darwin":  subprocess.call(["open", self.img_path])
-        else:                                subprocess.call(["xdg-open", self.img_path])
-
-
-# ──────────────────────────────────────────────────────
-# FLOW LAYOUT (wrap thumbnails)
-# ──────────────────────────────────────────────────────
-class FlowLayout(QLayout):
-    def __init__(self, parent=None, spacing=8):
+# =======================================================
+# COMPONENT: Label Ảnh Có Thể Click
+# =======================================================
+class ClickableImageLabel(QLabel):
+    def __init__(self, parent=None):
         super().__init__(parent)
-        self._spacing = spacing
-        self._items   = []
-        if parent:
-            self.setContentsMargins(10, 10, 10, 10)
+        self.filepath = None
+        self.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.setScaledContents(False) # Tắt scale tự động để dùng scale chuẩn của QPixmap
+        
+    def mousePressEvent(self, event):
+        if event.button() == Qt.MouseButton.LeftButton and self.filepath:
+            try:
+                if sys.platform == "win32":
+                    os.startfile(self.filepath)
+                elif sys.platform == "darwin":
+                    subprocess.call(["open", self.filepath])
+                else:
+                    subprocess.call(["xdg-open", self.filepath])
+            except Exception as e:
+                print(f"Không thể mở ảnh: {e}")
+        super().mousePressEvent(event)
 
-    def addItem(self, item):  self._items.append(item)
-    def count(self):          return len(self._items)
-    def itemAt(self, i):      return self._items[i] if 0 <= i < len(self._items) else None
-    def takeAt(self, i):      return self._items.pop(i) if 0 <= i < len(self._items) else None
-    def expandingDirections(self): return Qt.Orientation(0)
-    def hasHeightForWidth(self):   return True
-    def heightForWidth(self, w):   return self._layout(QRect(0,0,w,0), test=True)
-    def setGeometry(self, rect):
-        super().setGeometry(rect)
-        self._layout(rect, test=False)
-    def sizeHint(self):  return self.minimumSize()
-    def minimumSize(self):
-        s = QSize(0, 0)
-        for item in self._items: s = s.expandedTo(item.minimumSize())
-        m = self.contentsMargins()
-        return QSize(s.width()+m.left()+m.right(), s.height()+m.top()+m.bottom())
+# =======================================================
+# COMPONENT: Khung chứa ảnh Output
+# =======================================================
+class OutputImageContainer(QWidget):
+    def __init__(self, expected_images=2, parent=None):
+        super().__init__(parent)
+        self.layout = QGridLayout(self)
+        self.layout.setContentsMargins(6, 6, 6, 6)
+        self.layout.setSpacing(8)
+        
+        self.image_labels = []
+        
+        if expected_images == 1:
+            size, font_size = 160, 32
+        elif expected_images == 2:
+            size, font_size = 120, 24
+        else:
+            size, font_size = 80, 20
 
-    def _layout(self, rect, test):
-        m  = self.contentsMargins()
-        x  = rect.x() + m.left()
-        y  = rect.y() + m.top()
-        rh = 0
-        R  = rect.right() - m.right()
-        for item in self._items:
-            w = item.sizeHint()
-            if x + w.width() > R and x > rect.x() + m.left():
-                x = rect.x() + m.left(); y += rh + self._spacing; rh = 0
-            if not test:
-                item.setGeometry(QRect(QPoint(x, y), w))
-            x += w.width() + self._spacing
-            rh = max(rh, w.height())
-        return y + rh - rect.y() + m.bottom()
+        for i in range(expected_images):
+            lbl = ClickableImageLabel()
+            lbl.setFixedSize(size, size)
+            lbl.setStyleSheet(f"background: #131320; border: 1px dashed #2A2A48; border-radius: 8px; color: #505070; font-size: {font_size}px;")
+            lbl.setText("⏳")
+            
+            if expected_images == 1:
+                self.layout.addWidget(lbl, 0, 0, alignment=Qt.AlignmentFlag.AlignCenter)
+            elif expected_images == 2:
+                self.layout.addWidget(lbl, 0, i, alignment=Qt.AlignmentFlag.AlignCenter)
+            elif expected_images == 3:
+                if i < 2: self.layout.addWidget(lbl, 0, i, alignment=Qt.AlignmentFlag.AlignCenter)
+                else: self.layout.addWidget(lbl, 1, 0, 1, 2, alignment=Qt.AlignmentFlag.AlignCenter)
+            else:
+                row, col = divmod(i, 2)
+                self.layout.addWidget(lbl, row, col, alignment=Qt.AlignmentFlag.AlignCenter)
+                
+            self.image_labels.append(lbl)
+            
+        self.current_fill_idx = 0
+
+    def add_loaded_image(self, filepath):
+        if self.current_fill_idx < len(self.image_labels):
+            lbl = self.image_labels[self.current_fill_idx]
+            lbl.filepath = filepath 
+            try:
+                # Nạp ảnh và scale giữ nguyên tỷ lệ (KeepAspectRatio), hiển thị trọn vẹn 100% ảnh
+                pixmap = QPixmap(filepath)
+                scaled_pixmap = pixmap.scaled(
+                    lbl.width() - 4, lbl.height() - 4, 
+                    Qt.AspectRatioMode.KeepAspectRatio, 
+                    Qt.TransformationMode.SmoothTransformation
+                )
+
+                lbl.setPixmap(scaled_pixmap)
+                lbl.setText("")
+                lbl.setStyleSheet("border: 2px solid #00E676; border-radius: 8px; background: #131320; padding: 2px;") 
+            except Exception as e:
+                lbl.setText("❌")
+                lbl.setStyleSheet("border: 2px solid #E84040; border-radius: 8px; font-size: 24px; background: #1A1010;")
+                
+            self.current_fill_idx += 1
 
 
-# ──────────────────────────────────────────────────────
-# MAIN WINDOW
-# ──────────────────────────────────────────────────────
+# =======================================================
+# GIAO DIỆN CHÍNH
+# =======================================================
 class GLabsAutomationTab(QWidget):
     def __init__(self):
         super().__init__()
-        self.worker     = None
-        self.thumb_count = 0
         self._setup_ui()
+        self._connect_signals()
+        self.engine_thread = None 
+
+    def _connect_signals(self):
+        self.btn_import.clicked.connect(self._import_file)
+        self.btn_run.clicked.connect(self._start_engine)
+        self.btn_d3.clicked.connect(lambda: self._choose_dir(self.txt_out_dir))
 
     def _setup_ui(self):
-        self.setStyleSheet(self._css())
-        root = QVBoxLayout(self)
-        root.setContentsMargins(0, 0, 0, 0)
-        root.setSpacing(0)
+        self.setStyleSheet("""
+            QWidget { background-color: #11111E; color: #C4C4DC; font-family: 'Segoe UI', sans-serif; font-size: 13px; }
+            QLabel { color: #D0D0E0; }
+            QLabel#lbl_group { color: #8A8AA0; font-size: 12px; font-weight: bold; margin-bottom: 2px; }
+            QComboBox, QLineEdit, QSpinBox { background: #18182B; border: 1px solid #282840; border-radius: 6px; padding: 6px 10px; color: #E8E8F0; }
+            QComboBox:focus, QLineEdit:focus { border: 1px solid #5A4FCC; }
+            QComboBox::drop-down { border: none; }
+            QCheckBox { spacing: 8px; }
+            QCheckBox::indicator { width: 16px; height: 16px; border: 1px solid #2A2A48; border-radius: 4px; background: #18182B; }
+            QCheckBox::indicator:checked { background: #5A4FCC; border-color: #5A4FCC; }
+            QRadioButton { spacing: 8px; }
+            QRadioButton::indicator { width: 16px; height: 16px; border: 1px solid #2A2A48; border-radius: 8px; background: #18182B; }
+            QRadioButton::indicator:checked { background: #5A4FCC; border-color: #5A4FCC; }
+            QTextEdit { background: #18182B; border: 1px solid #282840; border-radius: 8px; padding: 10px; color: #E8E8F0; }
+            QPushButton#btn_blue { background: #5A4FCC; color: #FFF; border-radius: 6px; padding: 8px; font-weight: bold; }
+            QPushButton#btn_run { background: #00E676; color: #000; border-radius: 8px; padding: 12px; font-weight: bold; font-size: 14px; }
+            QPushButton#btn_dark { background: #282840; color: #D0D0E0; border-radius: 8px; padding: 12px; font-weight: bold; }
+            QPushButton#btn_footer { background: transparent; border: none; color: #A0A0C0; padding: 6px 12px; font-weight: bold; }
+            QPushButton#btn_footer:hover { color: #FFF; background: #18182B; border-radius: 4px; }
+            
+            QTableWidget { background: #151525; border: 1px solid #282840; border-radius: 8px; gridline-color: #202035; }
+            QHeaderView::section { background: #1A1A2E; color: #8A8AA0; padding: 12px; border: none; border-bottom: 1px solid #282840; border-right: 1px solid #282840; font-weight: bold; font-size: 12px; }
+            QTableWidget::item { padding: 10px; border-bottom: 1px solid #202035; }
+            QTableWidget::item:selected { background-color: #1E1E32; }
+        """)
 
-        # ── HEADER ───────────────────────────────────────
-        hdr = QWidget(); hdr.setObjectName("hdr")
-        hl  = QHBoxLayout(hdr); hl.setContentsMargins(28, 16, 28, 16)
-        col = QVBoxLayout(); col.setSpacing(2)
-        col.addWidget(self._lbl("G-Labs Auto Generator", "htitle"))
-        col.addWidget(self._lbl("Tự động tạo ảnh · Google Flow / ImageFX", "hsub"))
-        hl.addLayout(col); hl.addStretch()
-        dot = QLabel("⬤ Flow  ⬤ ImageFX"); dot.setObjectName("badge")
-        hl.addWidget(dot)
-        root.addWidget(hdr)
+        main_lay = QHBoxLayout(self)
+        main_lay.setContentsMargins(16, 12, 16, 12)
+        main_lay.setSpacing(12)
 
-        # ── CONTENT ──────────────────────────────────────
-        content = QHBoxLayout()
-        content.setContentsMargins(24, 20, 24, 20)
-        content.setSpacing(20)
+        # LEFT PANEL
+        left_panel = QFrame()
+        left_panel.setFixedWidth(280) # Thu hẹp panel điều khiển bên trái
+        left_lay = QVBoxLayout(left_panel)
+        left_lay.setContentsMargins(0, 0, 0, 0)
+        left_lay.setSpacing(8)
 
-        # ─── LEFT: Controls ──────────────────────────────
-        left = QVBoxLayout(); left.setSpacing(14)
+        title_lay = QHBoxLayout()
+        v_title = QVBoxLayout()
+        v_title.setSpacing(0)
+        lbl_h1 = QLabel("G-Labs")
+        lbl_h1.setStyleSheet("font-size: 24px; font-weight: bold; color: #FFF;")
+        lbl_h2 = QLabel("IMAGE CREATOR")
+        lbl_h2.setStyleSheet("font-size: 11px; font-weight: bold; color: #8A8AA0; letter-spacing: 1px;")
+        v_title.addWidget(lbl_h1)
+        v_title.addWidget(lbl_h2)
+        title_lay.addLayout(v_title)
+        
+        lbl_status = QLabel("🟢 1 Hoạt động")
+        lbl_status.setStyleSheet("background: #00E676; color: #000; border-radius: 12px; padding: 6px 12px; font-weight: bold; font-size: 12px;")
+        title_lay.addStretch()
+        title_lay.addWidget(lbl_status, alignment=Qt.AlignmentFlag.AlignTop)
+        left_lay.addLayout(title_lay)
 
-        # Tool
-        left.addWidget(self._lbl("CÔNG CỤ", "sec"))
-        self.cmb_tool = QComboBox(); self.cmb_tool.setObjectName("cmb")
-        self.cmb_tool.addItems(["Flow (Ảnh + Video)", "ImageFX (Chỉ ảnh)"])
-        left.addWidget(self.cmb_tool)
+        box_config = QFrame()
+        box_config.setStyleSheet("QFrame { background: #18182B; border: 1px solid #282840; border-radius: 12px; }")
+        box_lay = QVBoxLayout(box_config)
+        box_lay.setContentsMargins(16, 16, 16, 16)
+        box_lay.setSpacing(12)
 
-        # Thư mục
-        left.addWidget(self._lbl("THƯ MỤC LƯU", "sec"))
-        dr = QHBoxLayout(); dr.setSpacing(8)
-        self.lbl_dir = QLabel(str(Path.home()/"Downloads"/"GLabs"))
-        self.lbl_dir.setObjectName("dirlbl")
-        self.lbl_dir.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Preferred)
-        btn_d = QPushButton("📂"); btn_d.setObjectName("btnico"); btn_d.setFixedWidth(38)
-        btn_d.clicked.connect(self._pick_dir)
-        dr.addWidget(self.lbl_dir); dr.addWidget(btn_d)
-        left.addLayout(dr)
+        lbl_cft = QLabel("Cấu hình & Prompts")
+        lbl_cft.setStyleSheet("background: #5A4FCC; color: #FFF; border-radius: 12px; padding: 6px 16px; font-weight: bold; font-size: 12px;")
+        box_lay.addWidget(lbl_cft, alignment=Qt.AlignmentFlag.AlignLeft)
 
-        # Option dự án
-        left.addWidget(self._lbl("TÙY CHỌN DỰ ÁN", "sec"))
+        r1 = QHBoxLayout()
+        v1 = QVBoxLayout(); v1.addWidget(QLabel("Model:", objectName="lbl_group"))
+        self.cmb_model = QComboBox(); self.cmb_model.addItems(["Nano Banana 2", "Nano Banana Pro", "Imagen 4"]); v1.addWidget(self.cmb_model)
+        
+        v2 = QVBoxLayout(); v2.addWidget(QLabel("Chất lượng:", objectName="lbl_group"))
+        h_qual = QHBoxLayout()
+        rad_1k = QRadioButton("1K"); rad_1k.setChecked(True)
+        h_qual.addWidget(rad_1k)
+        h_qual.addWidget(QRadioButton("2K"))
+        h_qual.addWidget(QRadioButton("4K"))
+        v2.addLayout(h_qual)
+        r1.addLayout(v1); r1.addLayout(v2)
+        box_lay.addLayout(r1)
 
-        self.chk_new_proj = QCheckBox("Luôn tạo dự án mới khi bắt đầu")
-        self.chk_new_proj.setObjectName("chk")
-        self.chk_new_proj.setToolTip(
-            "Bỏ chọn (mặc định): dùng lại dự án đang mở hoặc dự án đầu tiên\n"
-            "Chọn: mỗi lần nhấn Start sẽ tạo 1 dự án mới hoàn toàn"
-        )
-        left.addWidget(self.chk_new_proj)
+        r2 = QHBoxLayout()
+        v3 = QVBoxLayout(); v3.addWidget(QLabel("Tỷ lệ ảnh:", objectName="lbl_group"))
+        self.cmb_ratio = QComboBox(); self.cmb_ratio.addItems(["16:9 Ngang", "9:16 Dọc", "1:1 Vuông", "4:3", "3:4"]); v3.addWidget(self.cmb_ratio)
+        
+        v4 = QVBoxLayout(); v4.addWidget(QLabel("Số lượng ảnh / prompt:", objectName="lbl_group"))
+        self.cmb_amt = QComboBox(); self.cmb_amt.addItems(["1x", "2x", "3x", "4x"]); self.cmb_amt.setCurrentText("2x"); v4.addWidget(self.cmb_amt)
+        r2.addLayout(v3); r2.addLayout(v4)
+        box_lay.addLayout(r2)
 
-        info = QLabel(
-            "ℹ  Mặc định: dùng lại dự án đã có.\n"
-            "   Mỗi prompt là 1 lượt chat trong cùng dự án."
-        )
-        info.setObjectName("info")
-        info.setWordWrap(True)
-        left.addWidget(info)
+        r3 = QHBoxLayout()
+        v5 = QVBoxLayout(); v5.addWidget(QLabel("Số luồng chạy đồng thời:", objectName="lbl_group"))
+        txt_threads = QLineEdit("6"); v5.addWidget(txt_threads)
+        
+        v6 = QVBoxLayout(); v6.addWidget(QLabel("Độ trễ giữa các luồng (s):", objectName="lbl_group"))
+        h_delay = QHBoxLayout()
+        h_delay.addWidget(QLineEdit("10 s")); h_delay.addWidget(QLabel("-")); h_delay.addWidget(QLineEdit("20 s"))
+        v6.addLayout(h_delay)
+        r3.addLayout(v5); r3.addLayout(v6)
+        box_lay.addLayout(r3)
 
-        # Prompts
-        left.addWidget(self._lbl("DANH SÁCH PROMPTS  (mỗi dòng = 1 ảnh)", "sec"))
-        self.txt_p = QTextEdit(); self.txt_p.setObjectName("txtp")
-        self.txt_p.setPlaceholderText(
-            "Nhập prompts, mỗi dòng 1 cái:\n\n"
-            "A cinematic lotus flower in rain, macro photography\n"
-            "Futuristic HCMC skyline at night, neon lights, 8K\n"
-            "Vietnamese rice field at golden hour, drone shot"
-        )
-        self.txt_p.setMinimumHeight(180)
-        left.addWidget(self.txt_p)
+        r4 = QHBoxLayout()
+        v7 = QVBoxLayout(); v7.addWidget(QLabel("Chế độ tham chiếu:", objectName="lbl_group"))
+        cmb_ref = QComboBox(); cmb_ref.addItems(["Mặc định"]); v7.addWidget(cmb_ref)
+        
+        h_seed = QHBoxLayout()
+        self.txt_seed = QLineEdit(""); h_seed.addWidget(self.txt_seed)
+        self.chk_seed = QCheckBox("Khóa seed"); self.chk_seed.setStyleSheet("color: #5A4FCC; font-weight: bold;")
+        h_seed.addWidget(self.chk_seed)
+        r4.addLayout(v7); r4.addLayout(h_seed)
+        r4.setAlignment(h_seed, Qt.AlignmentFlag.AlignBottom)
+        box_lay.addLayout(r4)
 
-        # Buttons
-        br = QHBoxLayout(); br.setSpacing(10)
-        self.btn_start = QPushButton("▶  Bắt đầu Generate"); self.btn_start.setObjectName("btnp")
-        self.btn_start.clicked.connect(self._start)
-        self.btn_stop  = QPushButton("■  Dừng");             self.btn_stop.setObjectName("btns")
-        self.btn_stop.clicked.connect(self._stop); self.btn_stop.setEnabled(False)
-        br.addWidget(self.btn_start, 2); br.addWidget(self.btn_stop, 1)
-        left.addLayout(br)
+        r5 = QHBoxLayout()
+        self.btn_import = QPushButton("ImportFile (TXT, Excel)"); self.btn_import.setObjectName("btn_blue")
+        r5.addWidget(self.btn_import); r5.addWidget(QLabel("📄 1 hàng / 1 prompt", styleSheet="color: #8A8AA0;"))
+        r5.addStretch()
+        box_lay.addLayout(r5)
 
-        # Log
-        left.addWidget(self._lbl("NHẬT KÝ", "sec"))
-        self.txt_log = QTextEdit(); self.txt_log.setObjectName("txtlog")
-        self.txt_log.setReadOnly(True)
-        self.txt_log.setMinimumHeight(160)
-        self.txt_log.setText(
-            "> Chờ lệnh...\n"
-            "> Bước 1: Chạy launch_chrome.py và đăng nhập Google.\n"
-            "> Bước 2: Nhập prompt → nhấn Bắt đầu."
-        )
-        left.addWidget(self.txt_log)
-        left.addStretch()
+        self.txt_prompts = QTextEdit()
+        self.txt_prompts.setPlaceholderText("Nhập danh sách prompt vào đây")
+        self.txt_prompts.setMinimumHeight(80)
+        box_lay.addWidget(self.txt_prompts)
 
-        lw = QWidget(); lw.setLayout(left); lw.setFixedWidth(440)
-        content.addWidget(lw)
+        box_lay.addWidget(QLabel("Thư mục ảnh tham chiếu:", objectName="lbl_group"))
+        h_dir1 = QHBoxLayout()
+        h_dir1.addWidget(QLineEdit("G-LABS-1.0\\reference_image"))
+        btn_d1 = QPushButton("📂"); btn_d1.setStyleSheet("background: transparent; font-size: 16px; border: none;"); h_dir1.addWidget(btn_d1)
+        box_lay.addLayout(h_dir1)
 
-        # ─── RIGHT: Gallery ───────────────────────────────
-        right = QVBoxLayout(); right.setSpacing(10)
+        h_dir2 = QHBoxLayout()
+        h_dir2.addWidget(QLabel("Chế độ lưu:", objectName="lbl_group"))
+        self.chk_task_folder = QCheckBox("📁 Tạo thư mục theo Task"); self.chk_task_folder.setChecked(True)
+        h_dir2.addWidget(self.chk_task_folder)
+        h_dir2.addStretch()
+        box_lay.addLayout(h_dir2)
 
-        tr = QHBoxLayout()
-        tr.addWidget(self._lbl("ẢNH ĐÃ TẠO", "sec"))
-        tr.addStretch()
-        self.lbl_cnt = QLabel("0 ảnh"); self.lbl_cnt.setObjectName("cnt")
-        tr.addWidget(self.lbl_cnt)
-        bc = QPushButton("Xoá"); bc.setObjectName("btnlnk"); bc.clicked.connect(self._clear)
-        tr.addWidget(bc)
-        right.addLayout(tr)
+        box_lay.addWidget(QLabel("Thư mục lưu:", objectName="lbl_group"))
+        h_dir3 = QHBoxLayout()
+        self.txt_out_dir = QLineEdit("outputs/glabs_images"); h_dir3.addWidget(self.txt_out_dir)
+        self.btn_d3 = QPushButton("📂"); self.btn_d3.setStyleSheet("background: transparent; font-size: 16px; border: none;"); h_dir3.addWidget(self.btn_d3)
+        box_lay.addLayout(h_dir3)
 
-        self.g_scroll = QScrollArea()
-        self.g_scroll.setWidgetResizable(True); self.g_scroll.setObjectName("gscroll")
-        self.g_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
-        self.g_widget = QWidget()
-        self.g_layout = FlowLayout(self.g_widget, spacing=8)
-        self.ph = QLabel("Ảnh sẽ xuất hiện ở đây\n(double-click để mở)")
-        self.ph.setObjectName("ph"); self.ph.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        self.g_layout.addWidget(self.ph)
-        self.g_scroll.setWidget(self.g_widget)
-        right.addWidget(self.g_scroll)
+        h_queue = QHBoxLayout()
+        btn_add = QPushButton("+ Thêm vào hàng chờ")
+        btn_add.setStyleSheet("background: transparent; border: 1px solid #5A4FCC; color: #5A4FCC; border-radius: 6px; padding: 8px; font-weight: bold;")
+        h_queue.addWidget(btn_add)
+        btn_mgr = QPushButton("📋 Quản lý hàng chờ (0)")
+        btn_mgr.setStyleSheet("background: transparent; border: 1px solid #282840; color: #A0A0C0; border-radius: 6px; padding: 8px;")
+        h_queue.addWidget(btn_mgr)
+        box_lay.addLayout(h_queue)
 
-        rw = QWidget(); rw.setLayout(right)
-        content.addWidget(rw, 1)
+        left_lay.addWidget(box_config)
 
-        root.addLayout(content, 1)
+        h_bottom = QHBoxLayout()
+        self.btn_run = QPushButton("🚀 CHẠY NGAY"); self.btn_run.setObjectName("btn_run")
+        btn_pause = QPushButton("TẠM DỪNG"); btn_pause.setObjectName("btn_dark")
+        btn_stop = QPushButton("DỪNG"); btn_stop.setObjectName("btn_dark")
+        h_bottom.addWidget(self.btn_run, 2)
+        h_bottom.addWidget(btn_pause, 1)
+        h_bottom.addWidget(btn_stop, 1)
+        left_lay.addLayout(h_bottom)
+        
+        main_lay.addWidget(left_panel)
 
-    # ── SLOTS ─────────────────────────────────────────
-    def _start(self):
-        raw = self.txt_p.toPlainText().strip()
-        if not raw:
-            self._log("❌ Chưa nhập prompt!"); return
+        # RIGHT PANEL
+        right_panel = QVBoxLayout()
+        right_panel.setSpacing(12)
 
-        prompts = [p for p in raw.split("\n") if p.strip()]
-        save_dir    = self.lbl_dir.text()
-        tool        = "flow" if "Flow" in self.cmb_tool.currentText() else "imagefx"
-        new_project = self.chk_new_proj.isChecked()
+        banner = QFrame()
+        banner.setStyleSheet("background: #1A1A32; border: 1px solid #2A2A50; border-radius: 8px;")
+        b_lay = QVBoxLayout(banner)
+        lbl_btitle = QLabel("🍌 Nano Banana Pro")
+        lbl_btitle.setStyleSheet("color: #FFB300; font-weight: bold; font-size: 14px;")
+        b_lay.addWidget(lbl_btitle)
+        b_lay.addWidget(QLabel("→ Kết hợp tối đa 10 ảnh tham chiếu để tạo ảnh độc đáo.\n💡 Chọn thư mục ảnh tham chiếu, gõ tên file vào prompt để tự động thêm ảnh.\n⭐ Phù hợp nhất để tạo ảnh có ảnh tham chiếu."))
+        right_panel.addWidget(banner)
 
-        self._log(f"\n{'═'*44}")
-        self._log(f"🎯 Công cụ : {self.cmb_tool.currentText()}")
-        self._log(f"📁 Lưu vào: {save_dir}")
-        self._log(f"📝 Prompts : {len(prompts)}")
-        self._log(f"🗂  Dự án  : {'Tạo mới' if new_project else 'Dùng lại / tự động'}")
-        self._log(f"{'═'*44}")
+        self.table = QTableWidget()
+        self.table.setColumnCount(7)
+        self.table.setHorizontalHeaderLabels(["", "STT", "Task", "Ảnh tham chiếu", "Prompt", "Ảnh output", "Tiến độ"])
+        
+        header = self.table.horizontalHeader()
+        header.setSectionResizeMode(0, QHeaderView.ResizeMode.Fixed); self.table.setColumnWidth(0, 40)
+        header.setSectionResizeMode(1, QHeaderView.ResizeMode.Fixed); self.table.setColumnWidth(1, 40)
+        header.setSectionResizeMode(2, QHeaderView.ResizeMode.Fixed); self.table.setColumnWidth(2, 140)
+        header.setSectionResizeMode(3, QHeaderView.ResizeMode.Fixed); self.table.setColumnWidth(3, 120) 
+        header.setSectionResizeMode(4, QHeaderView.ResizeMode.Stretch) 
+        header.setSectionResizeMode(5, QHeaderView.ResizeMode.Fixed); self.table.setColumnWidth(5, 280) 
+        header.setSectionResizeMode(6, QHeaderView.ResizeMode.Fixed); self.table.setColumnWidth(6, 100)
 
-        self.btn_start.setEnabled(False); self.btn_start.setText("⏳ Đang chạy...")
-        self.btn_stop.setEnabled(True)
+        self.table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
+        self.table.verticalHeader().setVisible(False)
+        self.table.setShowGrid(False)
 
-        self.worker = AutoWorker(prompts, save_dir, tool, new_project)
-        self.worker.log_signal.connect(self._log)
-        self.worker.image_signal.connect(self._add_thumb)
-        self.worker.done_signal.connect(self._done)
-        self.worker.start()
+        right_panel.addWidget(self.table)
 
-    def _stop(self):
-        if self.worker:
-            self.worker.stop()
-            self._log("⏳ Đang dừng..."); self.btn_stop.setEnabled(False)
+        f_lay = QHBoxLayout()
+        btns = ["+ Thêm dòng", "🖼️ Thêm ảnh", "🗑️ Xóa", "🧹 Xóa hết", "🔄 Chạy lại lỗi", "▶ Chạy mục chọn", "📂 Load Session", "✅ Hoàn thành"]
+        for b in btns:
+            btn = QPushButton(b)
+            btn.setObjectName("btn_footer")
+            if b == "✅ Hoàn thành":
+                btn.setStyleSheet("background: #1E1E32; border: 1px solid #5A4FCC; color: #D0D0E0; border-radius: 6px; padding: 6px 16px; font-weight: bold;")
+            f_lay.addWidget(btn)
+        f_lay.addStretch()
+        right_panel.addLayout(f_lay)
 
-    def _done(self, n):
-        self.btn_start.setEnabled(True); self.btn_start.setText("▶  Bắt đầu Generate")
-        self.btn_stop.setEnabled(False)
-        self._log(f"\n✅ Xong! Tổng: {n} ảnh.")
+        main_lay.addLayout(right_panel)
 
-    def _pick_dir(self):
-        d = QFileDialog.getExistingDirectory(self, "Chọn thư mục", self.lbl_dir.text())
-        if d: self.lbl_dir.setText(d)
+    def _import_file(self):
+        path, _ = QFileDialog.getOpenFileName(self, "Chọn file prompt", "", "Text Files (*.txt);;Excel Files (*.xlsx *.xls)")
+        if path:
+            if path.endswith('.txt'):
+                with open(path, 'r', encoding='utf-8') as f:
+                    self.txt_prompts.setPlainText(f.read())
+            elif path.endswith(('.xlsx', '.xls')):
+                try:
+                    import pandas as pd
+                    df = pd.read_excel(path)
+                    prompts = "\n".join(df.iloc[:, 0].astype(str).tolist())
+                    self.txt_prompts.setPlainText(prompts)
+                except ImportError:
+                    QMessageBox.warning(self, "Lỗi", "Vui lòng cài đặt thư viện 'pandas' để đọc file Excel.")
 
-    def _log(self, t):
-        self.txt_log.append(t)
-        self.txt_log.verticalScrollBar().setValue(self.txt_log.verticalScrollBar().maximum())
+    def _choose_dir(self, line_edit):
+        dir_path = QFileDialog.getExistingDirectory(self, "Chọn thư mục")
+        if dir_path: line_edit.setText(dir_path)
 
-    def _add_thumb(self, path):
-        if self.ph.isVisible(): self.ph.hide()
-        self.g_layout.addWidget(ThumbCard(path))
-        self.thumb_count += 1
-        self.lbl_cnt.setText(f"{self.thumb_count} ảnh")
-        self.g_scroll.verticalScrollBar().setValue(
-            self.g_scroll.verticalScrollBar().maximum())
+    def _start_engine(self):
+        if not ENGINE_OK:
+            QMessageBox.critical(self, "Lỗi", "Engine glabs_engine.py chưa được nạp!")
+            return
+            
+        raw_prompts = self.txt_prompts.toPlainText().strip().split('\n')
+        valid_prompts = [p.strip() for p in raw_prompts if p.strip()]
+        
+        if not valid_prompts:
+            QMessageBox.warning(self, "Lỗi", "Vui lòng nhập danh sách prompt.")
+            return
 
-    def _clear(self):
-        for i in reversed(range(self.g_layout.count())):
-            w = self.g_layout.itemAt(i).widget()
-            if w and w is not self.ph: w.deleteLater()
-        self.thumb_count = 0; self.lbl_cnt.setText("0 ảnh"); self.ph.show()
+        self.txt_prompts.clear()
 
-    def _lbl(self, t, obj=""):
-        l = QLabel(t)
-        if obj: l.setObjectName(obj)
-        return l
+        try:
+            amt = int(self.cmb_amt.currentText().replace("x", ""))
+        except ValueError:
+            amt = 2
 
-    # ── CSS ────────────────────────────────────────────
-    def _css(self):
-        return """
-        QWidget          { background:#09090F; color:#C4C4DC;
-                           font-family:'Segoe UI','SF Pro Text',sans-serif; font-size:13px; }
-        #hdr             { background:#0C0C18; border-bottom:1px solid #181828; }
-        #htitle          { font-size:17px; font-weight:700; color:#E8E8FF; letter-spacing:.3px; }
-        #hsub            { font-size:12px; color:#484870; }
-        #badge           { font-size:11px; color:#383878; letter-spacing:1px;
-                           padding:4px 10px; border:1px solid #1E1E38; border-radius:16px; }
-        #sec             { font-size:10px; font-weight:700; color:#323258;
-                           letter-spacing:1.4px; margin-top:6px; }
-        #dirlbl          { background:#0D0D1C; border:1px solid #1C1C30; border-radius:7px;
-                           padding:7px 10px; color:#6A6A90; font-size:12px; }
-        #info            { background:#0C0C1A; border:1px solid #181828; border-radius:8px;
-                           padding:8px 12px; color:#404068; font-size:12px; line-height:1.6; }
-        QCheckBox#chk    { color:#7070A0; spacing:8px; }
-        QCheckBox#chk::indicator { width:16px; height:16px; border:1px solid #2A2A48;
-                                   border-radius:4px; background:#0D0D1C; }
-        QCheckBox#chk::indicator:checked { background:#5A4FCC; border-color:#5A4FCC; }
-        QComboBox#cmb    { background:#0D0D1C; border:1px solid #1C1C30; border-radius:7px;
-                           padding:7px 12px; color:#B0B0D0; }
-        QComboBox#cmb:hover { border-color:#383870; }
-        QComboBox#cmb::drop-down { border:none; width:24px; }
-        QComboBox QAbstractItemView { background:#12121E; border:1px solid #28283C;
-                                       selection-background-color:#5A4FCC; color:#C0C0E0; }
-        QTextEdit#txtp   { background:#0C0C1C; border:1px solid #1C1C30; border-radius:8px;
-                           color:#D0D0F0; padding:10px; font-size:13px; }
-        QTextEdit#txtp:focus { border-color:#5A4FCC; }
-        QTextEdit#txtlog { background:#060610; border:1px solid #141420; border-radius:8px;
-                           color:#38D086; padding:10px;
-                           font-family:'Consolas','Courier New',monospace; font-size:12px; }
-        QPushButton#btnp { background:qlineargradient(x1:0,y1:0,x2:1,y2:0,
-                             stop:0 #4E45C0,stop:1 #7232E0);
-                           border:none; border-radius:8px; padding:11px 18px;
-                           color:#FFF; font-weight:700; }
-        QPushButton#btnp:hover    { background:qlineargradient(x1:0,y1:0,x2:1,y2:0,
-                                      stop:0 #5F55D0,stop:1 #8342F0); }
-        QPushButton#btnp:disabled { background:#1E1E30; color:#383850; }
-        QPushButton#btns { background:transparent; border:1px solid #2E1414;
-                           border-radius:8px; padding:11px 14px; color:#B03030; font-weight:600; }
-        QPushButton#btns:hover    { background:#160A0A; border-color:#B03030; }
-        QPushButton#btns:disabled { color:#2A1818; border-color:#1C1010; }
-        QPushButton#btnico { background:#0D0D1C; border:1px solid #1C1C30;
-                             border-radius:7px; color:#6868A0; font-size:15px; }
-        QPushButton#btnico:hover { border-color:#48489A; color:#A0A0CC; }
-        QPushButton#btnlnk { background:transparent; border:none;
-                             color:#2C2C50; font-size:12px; padding:2px 6px; }
-        QPushButton#btnlnk:hover { color:#5A4FCC; }
-        #gscroll         { background:#07070E; border:none; border-left:1px solid #111120; }
-        QScrollBar:vertical   { background:#09090F; width:5px; }
-        QScrollBar::handle:vertical { background:#1C1C30; border-radius:3px; min-height:28px; }
-        QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical { height:0; }
-        #ph  { color:#1C1C30; font-size:14px; line-height:2.2; }
-        #cnt { font-size:12px; color:#383858; }
-        """
+        task_name = os.path.basename(self.txt_out_dir.text())
+        if not task_name or task_name == "glabs_images":
+            import datetime
+            task_name = datetime.datetime.now().strftime("Task_%m%d_%H%M")
 
+        config = {
+            "prompts": valid_prompts,
+            "save_dir": self.txt_out_dir.text(),
+            "expected_images": amt,
+            "aspect_ratio": self.cmb_ratio.currentText(),
+            "model": self.cmb_model.currentText(),
+            "seed": self.txt_seed.text() if self.chk_seed.isChecked() else None,
+            "task_name": task_name if self.chk_task_folder.isChecked() else None
+        }
+        
+        start_row_idx = self._prepare_table_for_run(valid_prompts, config)
+        
+        self.btn_run.setEnabled(False)
+        self.btn_run.setText("⏳ ĐANG CHẠY...")
+        
+        self.engine_thread = EngineThread(config, start_row_idx)
+        self.engine_thread.progress_signal.connect(self._update_row_progress)
+        self.engine_thread.status_signal.connect(self._update_row_status)
+        self.engine_thread.image_signal.connect(self._add_image_to_row)
+        self.engine_thread.finished_signal.connect(self._on_engine_finished)
+        self.engine_thread.start()
 
-# ──────────────────────────────────────────────────────
-# ENTRY
-# ──────────────────────────────────────────────────────
+    def _prepare_table_for_run(self, prompts, config):
+        start_idx = self.table.rowCount()
+        self.table.setRowCount(start_idx + len(prompts))
+        
+        for i, prompt_text in enumerate(prompts):
+            row = start_idx + i
+            
+            expected = config['expected_images']
+            if expected == 1:
+                self.table.setRowHeight(row, 180)
+            elif expected == 2:
+                self.table.setRowHeight(row, 140)
+            else:
+                self.table.setRowHeight(row, 190)
+            
+            chk_widget = QWidget(); l_chk = QHBoxLayout(chk_widget); l_chk.setContentsMargins(0,0,0,0)
+            l_chk.addWidget(QCheckBox(), alignment=Qt.AlignmentFlag.AlignCenter)
+            self.table.setCellWidget(row, 0, chk_widget)
+            
+            stt = QTableWidgetItem(str(row+1)); stt.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
+            stt.setForeground(QColor("#8A8AA0"))
+            self.table.setItem(row, 1, stt)
+            
+            task_info = f"{config['task_name'] or 'Default'}\n{config['model']}\n{config['aspect_ratio']}"
+            task = QTableWidgetItem(task_info)
+            task.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
+            task.setForeground(QColor("#E8E8F0"))
+            self.table.setItem(row, 2, task)
+            
+            # Khởi tạo Lưới ảnh tham chiếu sạch sẽ (chỉ có nút, không có chữ)
+            self.table.setCellWidget(row, 3, RefImageGrid())
+            
+            prompt_item = QTableWidgetItem(prompt_text)
+            prompt_item.setForeground(QColor("#E8E8F0"))
+            self.table.setItem(row, 4, prompt_item)
+            
+            self.table.setCellWidget(row, 5, OutputImageContainer(config['expected_images']))
+            
+            lbl_prog = QLabel("0%")
+            lbl_prog.setStyleSheet("color: #8A8AA0; font-weight: bold; font-size: 14px;")
+            lbl_prog.setAlignment(Qt.AlignmentFlag.AlignCenter)
+            self.table.setCellWidget(row, 6, lbl_prog)
+            
+        return start_idx
+
+    def _update_row_status(self, row_idx, status):
+        lbl = self.table.cellWidget(row_idx, 6)
+        if lbl and "%" not in lbl.text(): 
+            lbl.setText("⏳")
+            lbl.setStyleSheet("color: #FFB300; font-weight: bold; font-size: 16px;")
+
+    def _update_row_progress(self, row_idx, percent):
+        lbl = self.table.cellWidget(row_idx, 6)
+        if lbl:
+            if percent == -1: # Nhận cờ lỗi -1 từ Engine
+                lbl.setText("Bị chặn")
+                lbl.setStyleSheet("color: #E84040; font-weight: bold; font-size: 14px;")
+            elif percent >= 100:
+                lbl.setText("Hoàn thành")
+                lbl.setStyleSheet("color: #00E676; font-weight: bold; font-size: 12px;") 
+            else:
+                lbl.setText(f"{percent}%")
+                lbl.setStyleSheet("color: #00E676; font-weight: bold; font-size: 14px;")
+
+    def _add_image_to_row(self, row_idx, filepath):
+        img_container = self.table.cellWidget(row_idx, 5)
+        if isinstance(img_container, OutputImageContainer):
+            img_container.add_loaded_image(filepath)
+
+    def _on_engine_finished(self):
+        self.btn_run.setEnabled(True)
+        self.btn_run.setText("🚀 CHẠY NGAY")
+        for i in range(self.table.rowCount()):
+            lbl = self.table.cellWidget(i, 6)
+            if lbl and ("%" in lbl.text() or "⏳" in lbl.text()):
+                lbl.setText("Hoàn thành")
+                lbl.setStyleSheet("color: #00E676; font-weight: bold; font-size: 12px;")
+
+# =======================================================
+# LUỒNG NỀN CHO ENGINE
+# =======================================================
+class EngineThread(QThread):
+    progress_signal = pyqtSignal(int, int)
+    image_signal = pyqtSignal(int, str)
+    status_signal = pyqtSignal(int, str)
+    finished_signal = pyqtSignal()
+
+    def __init__(self, config, start_row_idx=0):
+        super().__init__()
+        self.config = config
+        self.start_row_idx = start_row_idx
+
+    def run(self):
+        self.config['on_gen_start'] = lambda idx, prmpt: self.status_signal.emit(self.start_row_idx + idx, "Đang khởi tạo...")
+        self.config['on_gen_progress'] = lambda idx, pct: self.progress_signal.emit(self.start_row_idx + idx, pct)
+        self.config['on_image_saved'] = lambda idx, fp: self.image_signal.emit(self.start_row_idx + idx, fp)
+        
+        run_auto(**self.config, log_fn=print)
+        self.finished_signal.emit()
+
 if __name__ == "__main__":
     app = QApplication(sys.argv)
-    app.setStyle("Fusion")
-    pal = QPalette()
-    pal.setColor(QPalette.ColorRole.Window,     QColor("#09090F"))
-    pal.setColor(QPalette.ColorRole.WindowText, QColor("#C4C4DC"))
-    pal.setColor(QPalette.ColorRole.Base,       QColor("#0C0C1C"))
-    pal.setColor(QPalette.ColorRole.Text,       QColor("#C4C4DC"))
-    app.setPalette(pal)
-
     win = GLabsAutomationTab()
-    win.setWindowTitle("G-Labs Auto Generator")
-    win.resize(1080, 760)
+    win.setWindowTitle("G-Labs Auto UI Clone")
+    win.resize(1300, 800)
     win.show()
     sys.exit(app.exec())

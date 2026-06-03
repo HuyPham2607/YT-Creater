@@ -10,17 +10,18 @@ class DropZoneWidget(QFrame):
         self.setObjectName("upload_card")
         self.setAcceptDrops(True)
         self.setCursor(Qt.CursorShape.PointingHandCursor)
-        self.setMinimumHeight(120)
+        self.setMinimumHeight(80) # Giảm chiều cao tối thiểu của khu vực kéo thả
 
         vbox = QVBoxLayout(self); vbox.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        vbox.setSpacing(2)
         
-        lbl_icon = QLabel(icon); lbl_icon.setStyleSheet("font-size: 24px;")
+        lbl_icon = QLabel(icon); lbl_icon.setStyleSheet("font-size: 18px;")
         lbl_icon.setAlignment(Qt.AlignmentFlag.AlignCenter)
         
         lbl_title = QLabel(title); lbl_title.setStyleSheet("color: #E8742A; font-size: 11px; font-weight: bold; text-transform: uppercase;")
         lbl_title.setAlignment(Qt.AlignmentFlag.AlignCenter)
         
-        self.lbl_desc = QLabel(desc); self.lbl_desc.setStyleSheet("color: #606075; font-size: 13px;")
+        self.lbl_desc = QLabel(desc); self.lbl_desc.setStyleSheet("color: #606075; font-size: 11px;")
         self.lbl_desc.setAlignment(Qt.AlignmentFlag.AlignCenter)
         
         vbox.addWidget(lbl_icon); vbox.addWidget(lbl_title); vbox.addWidget(self.lbl_desc)

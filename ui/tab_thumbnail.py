@@ -4,9 +4,9 @@ from PyQt6.QtWidgets import (QWidget, QVBoxLayout, QHBoxLayout, QLabel,
 class ThumbnailTab(QWidget):
     def __init__(self):
         super().__init__()
-        main_lay = QVBoxLayout(self); main_lay.setContentsMargins(32, 32, 32, 32)
+        main_lay = QVBoxLayout(self); main_lay.setContentsMargins(15, 15, 15, 15) # Giảm lề
         
-        header = QHBoxLayout(); header.setContentsMargins(0,0,0,20)
+        header = QHBoxLayout(); header.setContentsMargins(0,0,0,15)
         vbox = QVBoxLayout(); vbox.addWidget(QLabel("Thumbnail Generator", objectName="page_title"))
         vbox.addWidget(QLabel("Dựa trên Title & DNA để tạo prompt Midjourney + Text Overlays", objectName="page_desc"))
         header.addLayout(vbox); header.addStretch(); header.addWidget(QLabel("Tool 5", objectName="page_badge"))

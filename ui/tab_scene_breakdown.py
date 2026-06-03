@@ -8,13 +8,13 @@ class SceneBreakdownTab(QWidget):
     def __init__(self):
         super().__init__()
         main_lay = QVBoxLayout(self)
-        main_lay.setContentsMargins(32, 32, 32, 32)
+        main_lay.setContentsMargins(10, 0, 10, 0)
         
         # ==========================================
         # 1. HEADER
         # ==========================================
         header = QHBoxLayout()
-        header.setContentsMargins(0, 0, 0, 20)
+        header.setContentsMargins(0, 0, 0, 2)
         vbox_h = QVBoxLayout()
         
         lbl_title = QLabel("Scene Breakdown")
@@ -122,7 +122,7 @@ class SceneBreakdownTab(QWidget):
         r_lay.addWidget(self.txt_preview)
         splitter.addWidget(right_panel)
 
-        splitter.setMinimumHeight(350)
+        splitter.setMinimumHeight(100) # Nén chiều cao khu vực Preview
         lay.addWidget(splitter)
 
         # --- ACTIONS ROW ---

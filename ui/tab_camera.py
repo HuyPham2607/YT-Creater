@@ -7,13 +7,13 @@ class CameraMovementTab(QWidget):
     def __init__(self):
         super().__init__()
         main_lay = QVBoxLayout(self)
-        main_lay.setContentsMargins(32, 32, 32, 32)
+        main_lay.setContentsMargins(15, 15, 15, 15) # Giảm lề
         
         # ==========================================
         # 1. HEADER
         # ==========================================
         header = QHBoxLayout()
-        header.setContentsMargins(0, 0, 0, 20)
+        header.setContentsMargins(0, 0, 0, 15)
         vbox_h = QVBoxLayout()
         
         lbl_title = QLabel("Camera Movement Prompts")

@@ -1,8 +1,9 @@
 === LỖI HỆ THỐNG ===
 Traceback (most recent call last):
-  File "C:\newapp\main.py", line 57, in main
+  File "C:\newapp\main.py", line 64, in main
     from ui.main_window import MainWindow
-  File "C:\newapp\ui\main_window.py", line 14, in <module>
-    from ui.tab_glabs import GLabsAutomationTab # <--- IMPORT TAB G-LABS
-    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-ImportError: cannot import name 'GLabsAutomationTab' from 'ui.tab_glabs' (C:\newapp\ui\tab_glabs.py)
+  File "C:\newapp\ui\main_window.py", line 7, in <module>
+    from ui.tab_script_writer import ScriptWriterTab
+  File "C:\newapp\ui\tab_script_writer.py", line 8, in <module>
+    from threads.research_worker import ResearchWorker
+ModuleNotFoundError: No module named 'threads.research_worker'

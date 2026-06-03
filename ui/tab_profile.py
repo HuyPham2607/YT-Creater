@@ -4,19 +4,24 @@ from PyQt6.QtWidgets import (QWidget, QVBoxLayout, QHBoxLayout, QLabel,
                              QPushButton, QGridLayout, QFrame, QScrollArea, 
                              QSizePolicy, QDialog, QLineEdit, QTextEdit, QMessageBox)
 from PyQt6.QtCore import Qt, pyqtSignal
+from PyQt6.QtGui import QCursor
 from ui.components import DropZoneWidget
 
 # Đường dẫn file lưu trữ database
 DB_FILE = "profiles.json"
+ACTIVE_PROFILE_FILE = "active_profile.json" # File lưu cấu hình khi bấm "Apply to All Tools"
 
 # =======================================================
-# 1. CỬA SỔ POP-UP: DÙNG CHUNG CHO TẠO MỚI & CHỈNH SỬA
+# 1. CỬA SỔ POP-UP: TẠO MỚI & CHỈNH SỬA (Giữ nguyên logic của bạn)
 # =======================================================
 class ProfileDialog(QDialog):
     def __init__(self, parent=None):
         super().__init__(parent)
         self.setWindowTitle("Tạo Profile mới")
-        self.resize(850, 700)
+        self.resize(750, 480) 
+        self.style_content = ""
+        self.dna_content = ""
+        self.topic_content = ""
         
         self.setStyleSheet("""
             QDialog { background-color: #0F0F18; border: 1px solid #252535; }
@@ -28,7 +33,6 @@ class ProfileDialog(QDialog):
         main_lay = QVBoxLayout(self)
         main_lay.setContentsMargins(32, 32, 32, 20)
 
-        # --- HEADER ---
         head_lay = QHBoxLayout()
         self.lbl_title = QLabel("Tạo Profile mới")
         self.lbl_title.setStyleSheet("font-size: 22px; font-weight: bold; color: #E8E8F0;")
@@ -41,7 +45,6 @@ class ProfileDialog(QDialog):
         line.setStyleSheet("background: #252535; border: none; margin: 10px 0;")
         main_lay.addWidget(line)
 
-        # --- NỘI DUNG FORM ---
         scroll = QScrollArea()
         scroll.setWidgetResizable(True)
         scroll.setStyleSheet("QScrollArea { border: none; background: transparent; }")
@@ -51,7 +54,6 @@ class ProfileDialog(QDialog):
         form_lay.setContentsMargins(0, 10, 16, 10)
         form_lay.setSpacing(20)
 
-        # Khởi tạo các biến chứa dữ liệu
         self.txt_name = QLineEdit()
         self.txt_niche = QLineEdit("Roleplay & Makeover")
         self.txt_visual = QLineEdit("2D Cartoon")
@@ -63,7 +65,6 @@ class ProfileDialog(QDialog):
         self.txt_char.setMaximumHeight(80)
         self.txt_bg.setMaximumHeight(80)
 
-        # 1. Tên kênh & Ngách
         row1 = QHBoxLayout()
         row1.setSpacing(16)
         
@@ -78,7 +79,6 @@ class ProfileDialog(QDialog):
         row1.addLayout(v_niche)
         form_lay.addLayout(row1)
 
-        # 2. Cài đặt mặc định
         form_lay.addWidget(QLabel("DEFAULT SETTINGS", objectName="section_label"))
         grid_def = QGridLayout()
         grid_def.setSpacing(16)
@@ -90,34 +90,39 @@ class ProfileDialog(QDialog):
         grid_def.addWidget(self.txt_pov, 1, 2)
         form_lay.addLayout(grid_def)
 
-        # 3. G-Labs Prompts
         form_lay.addWidget(QLabel("STYLE PROMPTS G-LABS", objectName="section_label"))
         form_lay.addWidget(QLabel("CHARACTER STYLE", objectName="muted"))
         form_lay.addWidget(self.txt_char)
         form_lay.addWidget(QLabel("BACKGROUND STYLE", objectName="muted"))
         form_lay.addWidget(self.txt_bg)
 
-        # 4. Context Files
         form_lay.addWidget(QLabel("CONTEXT FILES", objectName="section_label"))
         ctx_lay = QHBoxLayout()
         ctx_lay.setSpacing(16)
-        ctx_lay.addWidget(DropZoneWidget("📋", "STYLE GUIDE", "Upload .md"))
-        ctx_lay.addWidget(DropZoneWidget("🧬", "DNA KÊNH", "Upload .md"))
-        ctx_lay.addWidget(DropZoneWidget("📝", "CHỦ ĐỀ", "Upload .md"))
+        
+        self.dz_style = DropZoneWidget("📋", "STYLE GUIDE", "Upload .md")
+        self.dz_dna = DropZoneWidget("🧬", "DNA KÊNH", "Upload .md")
+        self.dz_topic = DropZoneWidget("📝", "CHỦ ĐỀ", "Upload .md")
+        
+        self.dz_style.file_loaded.connect(lambda p, c: setattr(self, 'style_content', c))
+        self.dz_dna.file_loaded.connect(lambda p, c: setattr(self, 'dna_content', c))
+        self.dz_topic.file_loaded.connect(lambda p, c: setattr(self, 'topic_content', c))
+        
+        ctx_lay.addWidget(self.dz_style)
+        ctx_lay.addWidget(self.dz_dna)
+        ctx_lay.addWidget(self.dz_topic)
         form_lay.addLayout(ctx_lay)
 
-        # NÚT AUTO EXTRACT (Đã được nâng cấp)
         self.btn_extract = QPushButton("⚡ Auto Extract", objectName="btn_sec")
         self.btn_extract.setFixedWidth(150)
-        self.btn_extract.setCursor(Qt.CursorShape.PointingHandCursor)
-        self.btn_extract.clicked.connect(self.auto_extract_data) # Gắn sự kiện click
+        self.btn_extract.setCursor(QCursor(Qt.CursorShape.PointingHandCursor))
+        self.btn_extract.clicked.connect(self.auto_extract_data)
         form_lay.addWidget(self.btn_extract)
 
         form_lay.addStretch()
         scroll.setWidget(widget)
         main_lay.addWidget(scroll)
 
-        # --- ĐÁY POP-UP ---
         act_lay = QHBoxLayout()
         act_lay.setContentsMargins(0, 10, 0, 0)
         act_lay.addStretch()
@@ -132,31 +137,21 @@ class ProfileDialog(QDialog):
         act_lay.addWidget(btn_save)
         main_lay.addLayout(act_lay)
 
-    # =======================================================
-    # LOGIC: AUTO EXTRACT TỪ AI
-    # =======================================================
     def auto_extract_data(self):
-        # Đổi chữ trên nút để báo hiệu đang xử lý
         self.btn_extract.setText("⏳ Đang trích xuất...")
         self.btn_extract.setEnabled(False)
+        QMessageBox.information(self, "Auto Extract", "Hệ thống đang mô phỏng gọi AI API đọc nội dung...")
         
-        # Hiển thị thông báo (Thực tế sau này đây sẽ là lúc gọi API Claude/Gemini)
-        QMessageBox.information(self, "Auto Extract", "Hệ thống đang mô phỏng gọi AI API đọc nội dung từ file Context và Style Guide...")
-        
-        # GIẢ LẬP KẾT QUẢ AI TRẢ VỀ: Tự động đổ dữ liệu vào Form
         self.txt_name.setText("Kênh Trinh Thám Lịch Sử")
         self.txt_niche.setText("Lịch Sử, Bí Ẩn, Án Mạng")
-        self.txt_visual.setText("Dark Academia, Noir, Sepia tone")
+        self.txt_visual.setText("Dark Academia, Noir")
         self.txt_lang.setText("English, Tiếng Việt")
-        self.txt_pov.setText("Ngôi 3 (Người kể chuyện bí ẩn)")
-        self.txt_char.setText("Nhân vật mang phong cách thế kỷ 19, mặc áo măng tô, đội mũ phớt, bóng tối che nửa khuôn mặt, nét vẽ comic đen trắng có điểm xuyết màu đỏ đẫm máu.")
-        self.txt_bg.setText("Thành phố sương mù London cổ kính, đèn đường leo lét, ngõ hẻm ẩm ướt đầy gạch vụn, phòng làm việc bừa bộn tài liệu phá án.")
+        self.txt_pov.setText("Ngôi 3 (Người kể chuyện)")
+        self.txt_char.setText("Nhân vật mang phong cách thế kỷ 19, áo măng tô...")
+        self.txt_bg.setText("Thành phố sương mù London cổ kính...")
         
-        # Phục hồi lại trạng thái của nút
         self.btn_extract.setText("⚡ Auto Extract")
         self.btn_extract.setEnabled(True)
-        QMessageBox.information(self, "Thành công", "Đã trích xuất và điền dữ liệu thành công!")
-
 
     def validate_and_save(self):
         if not self.txt_name.text().strip():
@@ -173,13 +168,15 @@ class ProfileDialog(QDialog):
             "lang": self.txt_lang.text().strip(),
             "pov": self.txt_pov.text().strip(),
             "char_style": self.txt_char.toPlainText().strip(),
-            "bg_style": self.txt_bg.toPlainText().strip()
+            "bg_style": self.txt_bg.toPlainText().strip(),
+            "style_content": self.style_content,
+            "dna_content": self.dna_content,
+            "topic_content": self.topic_content
         }
 
     def load_data(self, data):
         self.lbl_title.setText("Chỉnh sửa Profile")
         self.setWindowTitle("Chỉnh sửa Profile")
-        
         self.txt_name.setText(data.get("name", ""))
         self.txt_niche.setText(data.get("niche", ""))
         self.txt_visual.setText(data.get("visual", ""))
@@ -187,181 +184,334 @@ class ProfileDialog(QDialog):
         self.txt_pov.setText(data.get("pov", ""))
         self.txt_char.setText(data.get("char_style", ""))
         self.txt_bg.setText(data.get("bg_style", ""))
+        
+        self.style_content = data.get("style_content", "")
+        self.dna_content = data.get("dna_content", "")
+        self.topic_content = data.get("topic_content", "")
+        
+        if self.style_content:
+            self.dz_style.lbl_desc.setText("Đã lưu (có sẵn)")
+            self.dz_style.lbl_desc.setStyleSheet("color: #3AD68A; font-size: 11px;")
+        if self.dna_content:
+            self.dz_dna.lbl_desc.setText("Đã lưu (có sẵn)")
+            self.dz_dna.lbl_desc.setStyleSheet("color: #3AD68A; font-size: 11px;")
+        if self.topic_content:
+            self.dz_topic.lbl_desc.setText("Đã lưu (có sẵn)")
+            self.dz_topic.lbl_desc.setStyleSheet("color: #3AD68A; font-size: 11px;")
 
 
 # =======================================================
-# 2. COMPONENT: THẺ PROFILE (CÓ TÍN HIỆU EDIT & DELETE)
+# 2. COMPONENT BÊN TRÁI: ITEM DANH SÁCH PROFILE
 # =======================================================
-class ProfileCard(QFrame):
-    edit_clicked = pyqtSignal(int)
-    delete_clicked = pyqtSignal(int)
+class ProfileListItem(QFrame):
+    clicked = pyqtSignal(int)
 
-    def __init__(self, data, index):
+    def __init__(self, data, index, is_active=False):
         super().__init__()
         self.index = index
+        self.setCursor(QCursor(Qt.CursorShape.PointingHandCursor))
         
-        self.setObjectName("profile_card")
-        self.setStyleSheet("""
-            QFrame#profile_card { background: #0F0F18; border: 1px solid #252535; border-radius: 12px; }
-            QFrame#profile_card:hover { border: 1px solid #E8742A; background: rgba(232,116,42,0.02); }
-        """)
-        self.setFixedWidth(380)
+        # Style active / inactive giống web
+        if is_active:
+            self.setStyleSheet("""
+                QFrame { background: rgba(232,116,42,0.1); border: 1px solid #E8742A; border-radius: 8px; }
+                QLabel { background: transparent; border: none; }
+            """)
+        else:
+            self.setStyleSheet("""
+                QFrame { background: #0F0F18; border: 1px solid #252535; border-radius: 8px; }
+                QFrame:hover { background: #161622; border: 1px solid #353545; }
+                QLabel { background: transparent; border: none; }
+            """)
 
         lay = QVBoxLayout(self)
-        lay.setContentsMargins(20, 20, 20, 20)
-        lay.setSpacing(16)
+        lay.setContentsMargins(12, 12, 12, 12)
+        lay.setSpacing(6)
 
-        lbl_title = QLabel(data.get("name", "Unknown Profile"))
-        lbl_title.setStyleSheet("font-size: 18px; font-weight: bold; color: #E8E8F0;")
-        lay.addWidget(lbl_title)
-
-        info_grid = QGridLayout()
-        info_grid.setSpacing(10)
-        info_grid.addWidget(QLabel("Ngách:", objectName="muted"), 0, 0)
-        info_grid.addWidget(QLabel(data.get("niche", ""), styleSheet="color: #E8E8F0; font-weight: bold;"), 0, 1)
-        info_grid.addWidget(QLabel("Ngôn ngữ:", objectName="muted"), 1, 0)
-        info_grid.addWidget(QLabel(data.get("lang", ""), styleSheet="color: #E8E8F0;"), 1, 1)
-        info_grid.addWidget(QLabel("Visual:", objectName="muted"), 2, 0)
-        info_grid.addWidget(QLabel(data.get("visual", ""), styleSheet="color: #E8E8F0;"), 2, 1)
-        info_grid.setColumnStretch(1, 1)
-        lay.addLayout(info_grid)
-
-        line = QFrame()
-        line.setFrameShape(QFrame.Shape.HLine)
-        line.setStyleSheet("background: #252535; border: none; margin: 5px 0;")
-        lay.addWidget(line)
-
-        btn_lay = QHBoxLayout()
-        btn_lay.setSpacing(12)
+        lbl_name = QLabel(data.get("name", "Unknown Profile"))
+        lbl_name.setStyleSheet(f"font-size: 15px; font-weight: bold; color: {'#E8742A' if is_active else '#E8E8F0'};")
         
-        self.btn_edit = QPushButton("✏️ Chỉnh sửa", objectName="btn_sec")
-        self.btn_edit.setStyleSheet("font-size: 12px; padding: 8px 12px;")
-        
-        self.btn_delete = QPushButton("🗑️ Xóa")
-        self.btn_delete.setStyleSheet("""
-            QPushButton { background: transparent; color: #E84040; border: 1px solid rgba(232,64,64,0.3); border-radius: 8px; padding: 8px 12px; font-size: 12px; font-weight: bold;}
-            QPushButton:hover { background: rgba(232,64,64,0.1); border: 1px solid #E84040; }
-        """)
-        
-        btn_lay.addWidget(self.btn_edit)
-        btn_lay.addWidget(self.btn_delete)
-        btn_lay.addStretch()
-        lay.addLayout(btn_lay)
+        # Mô tả ngắn gọn giống thẻ bên trái web
+        desc = f"{data.get('niche', 'Niche')} • {data.get('lang', 'vi')} • {data.get('visual', 'custom')}"
+        lbl_desc = QLabel(desc)
+        lbl_desc.setStyleSheet("font-size: 12px; color: #8A8A9E;")
+        lbl_desc.setWordWrap(True)
 
-        self.btn_edit.clicked.connect(lambda: self.edit_clicked.emit(self.index))
-        self.btn_delete.clicked.connect(lambda: self.delete_clicked.emit(self.index))
+        lay.addWidget(lbl_name)
+        lay.addWidget(lbl_desc)
+
+    def mousePressEvent(self, event):
+        self.clicked.emit(self.index)
+        super().mousePressEvent(event)
 
 
 # =======================================================
-# 3. TAB CHÍNH: PROFILE MANAGER
+# 3. TAB CHÍNH: PROFILE MANAGER (Master-Detail Layout)
 # =======================================================
 class ProfileManagerTab(QWidget):
+    profile_applied = pyqtSignal(dict)
+
     def __init__(self):
         super().__init__()
         self.profiles = []
+        self.selected_index = -1
         
-        main_lay = QVBoxLayout(self)
-        main_lay.setContentsMargins(32, 32, 32, 32)
+        main_lay = QHBoxLayout(self)
+        main_lay.setContentsMargins(15, 15, 15, 15)
+        main_lay.setSpacing(20)
 
-        header = QHBoxLayout()
-        header.setContentsMargins(0, 0, 0, 20)
-        
-        vbox_h = QVBoxLayout()
-        vbox_h.setSpacing(4)
-        vbox_h.addWidget(QLabel("Profile Manager", objectName="page_title"))
-        vbox_h.addWidget(QLabel("Quản lý DNA và Style cho từng kênh", objectName="page_desc"))
-        header.addLayout(vbox_h)
-        
-        lbl_badge = QLabel("Tool Profile", objectName="page_badge")
-        header.addWidget(lbl_badge, alignment=Qt.AlignmentFlag.AlignTop)
-        header.addStretch()
+        # ---------------------------------------------------
+        # PANE BÊN TRÁI: DANH SÁCH PROFILES
+        # ---------------------------------------------------
+        left_pane = QWidget()
+        left_pane.setFixedWidth(280)
+        left_lay = QVBoxLayout(left_pane)
+        left_lay.setContentsMargins(0, 0, 0, 0)
+        left_lay.setSpacing(10)
 
-        self.btn_new_profile = QPushButton("+ Tạo Profile mới", objectName="btn_primary")
-        self.btn_new_profile.setCursor(Qt.CursorShape.PointingHandCursor)
+        # Đưa nút Tạo mới lên Header cùng hàng với chữ Profiles
+        list_header_lay = QHBoxLayout()
+        self.lbl_profile_count = QLabel("Profiles (0)")
+        self.lbl_profile_count.setStyleSheet("font-size: 16px; font-weight: bold; color: #E8E8F0;")
+        list_header_lay.addWidget(self.lbl_profile_count)
+        list_header_lay.addStretch()
+        self.btn_new_profile = QPushButton("+ Tạo mới", objectName="btn_primary")
+        self.btn_new_profile.setCursor(QCursor(Qt.CursorShape.PointingHandCursor))
         self.btn_new_profile.clicked.connect(self.open_new_profile_dialog)
-        header.addWidget(self.btn_new_profile, alignment=Qt.AlignmentFlag.AlignTop)
+        list_header_lay.addWidget(self.btn_new_profile)
+        left_lay.addLayout(list_header_lay)
+
+        # Khu vực scroll danh sách
+        scroll_list = QScrollArea()
+        scroll_list.setWidgetResizable(True)
+        scroll_list.setStyleSheet("QScrollArea { border: none; background: transparent; }")
         
-        main_lay.addLayout(header)
+        self.list_widget = QWidget()
+        self.list_lay = QVBoxLayout(self.list_widget)
+        self.list_lay.setContentsMargins(0, 0, 0, 0)
+        self.list_lay.setSpacing(8)
+        self.list_lay.addStretch()
+        
+        scroll_list.setWidget(self.list_widget)
+        left_lay.addWidget(scroll_list)
 
-        scroll = QScrollArea()
-        scroll.setWidgetResizable(True)
-        widget = QWidget()
-        lay = QVBoxLayout(widget)
-        lay.setContentsMargins(0, 0, 0, 0)
 
-        self.grid_cards = QGridLayout()
-        self.grid_cards.setSpacing(24)
-        lay.addLayout(self.grid_cards)
-        lay.addStretch()
+        # ---------------------------------------------------
+        # PANE BÊN PHẢI: CHI TIẾT PROFILE (Khớp giao diện Web)
+        # ---------------------------------------------------
+        self.right_pane = QFrame()
+        self.right_pane.setStyleSheet("QFrame { background: #0F0F18; border: 1px solid #252535; border-radius: 12px; }")
+        right_lay = QVBoxLayout(self.right_pane)
+        right_lay.setContentsMargins(24, 24, 24, 24)
+        right_lay.setSpacing(20)
 
-        scroll.setWidget(widget)
-        main_lay.addWidget(scroll)
+        # Tiêu đề "Chi tiet Profile"
+        lbl_detail_title = QLabel("Chi tiết Profile")
+        lbl_detail_title.setStyleSheet("font-size: 16px; font-weight: bold; color: #E8E8F0; border: none;")
+        right_lay.addWidget(lbl_detail_title)
+
+        # Hàng chứa Tên Kênh và Cụm Nút chức năng
+        header_lay = QHBoxLayout()
+        self.lbl_active_name = QLabel("• CHƯA CHỌN PROFILE")
+        self.lbl_active_name.setStyleSheet("font-size: 18px; font-weight: bold; color: #E8742A; text-transform: uppercase; border: none;")
+        
+        self.btn_edit = QPushButton("Edit")
+        self.btn_edit.setStyleSheet("QPushButton { background: #1A1A24; color: #E8E8F0; border: 1px solid #353545; border-radius: 6px; padding: 6px 12px; font-size: 13px; } QPushButton:hover { background: #252535; }")
+        
+        self.btn_apply = QPushButton("Apply to All Tools")
+        self.btn_apply.setStyleSheet("QPushButton { background: rgba(58,214,138,0.1); color: #3AD68A; border: 1px solid #3AD68A; border-radius: 6px; padding: 6px 16px; font-weight: bold; font-size: 13px; } QPushButton:hover { background: rgba(58,214,138,0.2); }")
+        
+        self.btn_delete = QPushButton("Delete")
+        self.btn_delete.setStyleSheet("QPushButton { background: transparent; color: #E84040; border: 1px solid rgba(232,64,64,0.5); border-radius: 6px; padding: 6px 12px; font-size: 13px; } QPushButton:hover { background: rgba(232,64,64,0.1); }")
+        
+        self.btn_edit.clicked.connect(self.edit_profile)
+        self.btn_apply.clicked.connect(self.apply_to_all_tools)
+        self.btn_delete.clicked.connect(self.delete_profile)
+
+        header_lay.addWidget(self.lbl_active_name)
+        header_lay.addStretch()
+        header_lay.addWidget(self.btn_edit)
+        header_lay.addWidget(self.btn_apply)
+        header_lay.addWidget(self.btn_delete)
+        right_lay.addLayout(header_lay)
+
+        # Lưới thông tin chi tiết
+        grid_info = QGridLayout()
+        grid_info.setVerticalSpacing(16)
+        grid_info.setHorizontalSpacing(24)
+        
+        # Row 1
+        grid_info.addWidget(QLabel("NGÁCH", objectName="muted"), 0, 0)
+        self.lbl_val_niche = QLabel("-")
+        self.lbl_val_niche.setStyleSheet("color: #E8E8F0; font-size: 14px; font-weight: bold; border: none;")
+        grid_info.addWidget(self.lbl_val_niche, 1, 0)
+
+        grid_info.addWidget(QLabel("NGÔN NGỮ", objectName="muted"), 0, 1)
+        self.lbl_val_lang = QLabel("-")
+        self.lbl_val_lang.setStyleSheet("color: #E8E8F0; font-size: 14px; border: none;")
+        grid_info.addWidget(self.lbl_val_lang, 1, 1)
+
+        grid_info.addWidget(QLabel("STYLE / VISUAL", objectName="muted"), 0, 2)
+        self.lbl_val_visual = QLabel("-")
+        self.lbl_val_visual.setStyleSheet("color: #E8E8F0; font-size: 14px; border: none;")
+        grid_info.addWidget(self.lbl_val_visual, 1, 2)
+
+        # Row 2
+        grid_info.addWidget(QLabel("CẤU TRÚC (Mặc định)", objectName="muted"), 2, 0)
+        lbl_val_struct = QLabel("Tuỳ chọn ở Tool 1")
+        lbl_val_struct.setStyleSheet("color: #8A8A9E; font-size: 14px; border: none;")
+        grid_info.addWidget(lbl_val_struct, 3, 0)
+
+        grid_info.addWidget(QLabel("TARGET", objectName="muted"), 2, 1)
+        lbl_val_target = QLabel("Tuỳ chọn ở Tool 1")
+        lbl_val_target.setStyleSheet("color: #8A8A9E; font-size: 14px; border: none;")
+        grid_info.addWidget(lbl_val_target, 3, 1)
+
+        grid_info.addWidget(QLabel("POV", objectName="muted"), 2, 2)
+        self.lbl_val_pov = QLabel("-")
+        self.lbl_val_pov.setStyleSheet("color: #E8E8F0; font-size: 14px; border: none;")
+        grid_info.addWidget(self.lbl_val_pov, 3, 2)
+        
+        grid_info.setColumnStretch(0, 2)
+        grid_info.setColumnStretch(1, 1)
+        grid_info.setColumnStretch(2, 1)
+        right_lay.addLayout(grid_info)
+
+        # Khối hiển thị File Context (Giả lập giống web với dấu tick xanh)
+        right_lay.addSpacing(10)
+        self.box_style = self.create_status_box("✓ Style Guide loaded (Sẵn sàng)")
+        self.box_dna = self.create_status_box("✓ DNA loaded (Sẵn sàng)")
+        self.box_topic = self.create_status_box("✓ Chu De loaded (Sẵn sàng)")
+        right_lay.addWidget(self.box_style)
+        right_lay.addWidget(self.box_dna)
+        right_lay.addWidget(self.box_topic)
+
+        # Notes
+        self.lbl_notes = QLabel("Notes: ...")
+        self.lbl_notes.setStyleSheet("color: #8A8A9E; font-size: 13px; border: none;")
+        self.lbl_notes.setWordWrap(True)
+        right_lay.addWidget(self.lbl_notes)
+
+        right_lay.addStretch()
+
+        # ---------------------------------------------------
+        # Thêm vào Layout chính
+        # ---------------------------------------------------
+        main_lay.addWidget(left_pane)
+        main_lay.addWidget(self.right_pane)
 
         self.load_database()
+        self.update_detail_view() # Ẩn đi nếu chưa có profile
+
+    def create_status_box(self, text):
+        lbl = QLabel(text)
+        lbl.setStyleSheet("background: rgba(58,214,138,0.05); color: #3AD68A; border: 1px solid rgba(58,214,138,0.2); border-radius: 6px; padding: 10px 15px; font-family: monospace;")
+        return lbl
 
     def load_database(self):
         if os.path.exists(DB_FILE):
             try:
                 with open(DB_FILE, "r", encoding="utf-8") as f:
                     self.profiles = json.load(f)
-            except Exception as e:
-                print("Lỗi đọc file:", e)
+            except Exception:
                 self.profiles = []
-        self.render_grid()
+        
+        # Chọn mặc định cái đầu tiên nếu có
+        if self.profiles:
+            self.selected_index = 0
+        else:
+            self.selected_index = -1
+            
+        self.render_list()
 
     def save_database(self):
         with open(DB_FILE, "w", encoding="utf-8") as f:
             json.dump(self.profiles, f, ensure_ascii=False, indent=4)
 
-    def render_grid(self):
-        for i in reversed(range(self.grid_cards.count())):
-            widget_to_remove = self.grid_cards.itemAt(i).widget()
-            if widget_to_remove is not None:
-                widget_to_remove.setParent(None)
-                widget_to_remove.deleteLater()
+    def render_list(self):
+        # Xóa list cũ
+        while self.list_lay.count() > 1: # Chừa lại addStretch ở cuối
+            item = self.list_lay.takeAt(0)
+            if item.widget():
+                item.widget().deleteLater()
 
-        columns = 3
+        self.lbl_profile_count.setText(f"Profiles ({len(self.profiles)})")
+
         for index, profile_data in enumerate(self.profiles):
-            row = index // columns
-            col = index % columns
+            is_active = (index == self.selected_index)
+            item = ProfileListItem(profile_data, index, is_active)
+            item.clicked.connect(self.select_profile)
+            self.list_lay.insertWidget(self.list_lay.count() - 1, item)
             
-            card = ProfileCard(profile_data, index)
-            card.edit_clicked.connect(self.edit_profile)
-            card.delete_clicked.connect(self.delete_profile)
-            
-            self.grid_cards.addWidget(card, row, col)
+        self.update_detail_view()
 
-        self.grid_cards.setColumnStretch(0, 1)
-        self.grid_cards.setColumnStretch(1, 1)
-        self.grid_cards.setColumnStretch(2, 1)
+    def select_profile(self, index):
+        self.selected_index = index
+        self.render_list() # Render lại để cập nhật màu viền active
+
+    def update_detail_view(self):
+        if self.selected_index >= 0 and self.selected_index < len(self.profiles):
+            self.right_pane.show()
+            data = self.profiles[self.selected_index]
+            
+            self.lbl_active_name.setText(f"• {data.get('name', 'UNKNOWN').upper()}")
+            self.lbl_val_niche.setText(data.get("niche", "-"))
+            self.lbl_val_lang.setText(data.get("lang", "-"))
+            self.lbl_val_visual.setText(data.get("visual", "-"))
+            self.lbl_val_pov.setText(data.get("pov", "-"))
+            
+            # Gộp character và background style vào Notes
+            notes = f"Notes:\n- Character: {data.get('char_style', 'N/A')}\n- Background: {data.get('bg_style', 'N/A')}"
+            self.lbl_notes.setText(notes)
+            
+            # Hiển thị hoặc ẩn các hộp báo trạng thái File
+            self.box_style.setVisible(bool(data.get("style_content")))
+            self.box_dna.setVisible(bool(data.get("dna_content")))
+            self.box_topic.setVisible(bool(data.get("topic_content")))
+        else:
+            self.right_pane.hide()
+
+    def apply_to_all_tools(self):
+        """Lưu profile đang chọn thành Active Profile để các Tool khác dùng"""
+        if self.selected_index >= 0:
+            active_data = self.profiles[self.selected_index]
+            try:
+                with open(ACTIVE_PROFILE_FILE, "w", encoding="utf-8") as f:
+                    json.dump(active_data, f, ensure_ascii=False, indent=4)
+                QMessageBox.information(self, "Thành công", f"Đã áp dụng cấu hình của kênh '{active_data['name']}' cho toàn bộ Tools!")
+                self.profile_applied.emit(active_data)
+            except Exception as e:
+                QMessageBox.critical(self, "Lỗi", f"Không thể lưu Active Profile:\n{e}")
 
     def open_new_profile_dialog(self):
         dialog = ProfileDialog(self)
         if dialog.exec(): 
             new_data = dialog.get_profile_data()
             self.profiles.append(new_data) 
+            self.selected_index = len(self.profiles) - 1 # Tự động chọn profile vừa tạo
             self.save_database()           
-            self.render_grid()             
+            self.render_list()             
 
-    def edit_profile(self, index):
-        dialog = ProfileDialog(self)
-        dialog.load_data(self.profiles[index])
-        
-        if dialog.exec():
-            updated_data = dialog.get_profile_data()
-            self.profiles[index] = updated_data
-            self.save_database()
-            self.render_grid()
+    def edit_profile(self):
+        if self.selected_index >= 0:
+            dialog = ProfileDialog(self)
+            dialog.load_data(self.profiles[self.selected_index])
+            if dialog.exec():
+                updated_data = dialog.get_profile_data()
+                self.profiles[self.selected_index] = updated_data
+                self.save_database()
+                self.render_list()
 
-    def delete_profile(self, index):
-        profile_name = self.profiles[index].get("name", "kênh này")
-        
-        reply = QMessageBox.question(self, 'Xác nhận xóa', 
-                                     f'Bạn có chắc chắn muốn xóa profile "{profile_name}"?\n(Thao tác này không thể hoàn tác)',
-                                     QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
-                                     QMessageBox.StandardButton.No)
-        
-        if reply == QMessageBox.StandardButton.Yes:
-            self.profiles.pop(index) 
-            self.save_database()     
-            self.render_grid()
+    def delete_profile(self):
+        if self.selected_index >= 0:
+            profile_name = self.profiles[self.selected_index].get("name", "kênh này")
+            reply = QMessageBox.question(self, 'Xác nhận xóa', 
+                                         f'Bạn có chắc chắn muốn xóa profile "{profile_name}"?\n(Thao tác này không thể hoàn tác)',
+                                         QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+                                         QMessageBox.StandardButton.No)
+            
+            if reply == QMessageBox.StandardButton.Yes:
+                self.profiles.pop(self.selected_index)
+                self.selected_index = 0 if self.profiles else -1
+                self.save_database()     
+                self.render_list()

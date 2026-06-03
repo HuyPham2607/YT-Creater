@@ -1,6 +1,9 @@
 import time
 import os
-import google.generativeai as genai
+try:
+    from google import genai
+except ImportError:
+    genai = None
 from dotenv import load_dotenv
 from PyQt6.QtCore import QThread, pyqtSignal
 
@@ -29,12 +32,11 @@ class AIWorker(QThread):
         
         # Cấu hình Gemini API
         api_key = os.getenv("GEMINI_API_KEY")
-        if api_key:
-            genai.configure(api_key=api_key)
-            # Dùng model gemini-1.5-flash cho tốc độ cực nhanh, hoặc gemini-1.5-pro cho suy luận sâu
-            self.model = genai.GenerativeModel('gemini-3.5-flash')
+        if api_key and genai:
+            self.client = genai.Client(api_key=api_key)
+            self.model_name = 'gemini-1.5-flash'
         else:
-            self.model = None
+            self.client = None
 
     # Hàm thực sự đọc nội dung từ danh sách các file được kéo thả
     def read_files_content(self):
@@ -54,7 +56,7 @@ class AIWorker(QThread):
         return combined_text
 
     def run(self):
-        if not self.model:
+        if not self.client:
             self.result_signal.emit("output", "❌ LỖI NGHIÊM TRỌNG: Không tìm thấy GEMINI_API_KEY trong file .env!")
             self.finished_signal.emit()
             return
@@ -82,7 +84,7 @@ class AIWorker(QThread):
                 {source_text[:30000]}
                 """
                 
-                response = self.model.generate_content(prompt)
+                response = self.client.models.generate_content(model=self.model_name, contents=prompt)
                 res_text = response.text
                 
                 # Tự động cắt đôi kết quả để điền vào 2 ô TextEdit trên giao diện
@@ -101,37 +103,8 @@ class AIWorker(QThread):
             elif self.task_type == "ideas":
                 self.progress_signal.emit("🧠 Đang gọi Gemini sáng tạo ý tưởng...")
                 prompt = f"Dựa vào DNA kênh:\n{self.dna}\n\nStyle Guide:\n{self.style}\n\nHãy sáng tạo 5 tiêu đề video chuẩn viral về chủ đề: '{self.topic}'."
-                response = self.model.generate_content(prompt)
+                response = self.client.models.generate_content(model=self.model_name, contents=prompt)
                 self.result_signal.emit("output", response.text)
-
-            # ---------------------------------------------------------
-            # TÁC VỤ 3: GEMINI VIẾT KỊCH BẢN CHI TIẾT
-            # ---------------------------------------------------------
-            # ---------------------------------------------------------
-            # TÁC VỤ 3: GEMINI VIẾT KỊCH BẢN CHI TIẾT
-            # ---------------------------------------------------------
-            elif self.task_type == "script":
-                self.progress_signal.emit("✍️ Gemini đang cày kịch bản chi tiết...")
-                
-                research_prompt = "Hãy đóng vai một chuyên gia phân tích. Đưa ra các số liệu thực tế, phần trăm lạm phát, hoặc các ví dụ cụ thể về kinh tế/tài chính để tăng tính thuyết phục." if self.research_enabled else ""
-                
-                prompt = f"""Dựa vào DNA kênh sau đây:\n{self.dna}\n
-                Và tuân thủ nghiêm ngặt Style Guide sau:\n{self.style}\n
-                {research_prompt}
-                
-                Nhiệm vụ: Viết MỘT KỊCH BẢN YOUTUBE DÀI (Long-form video), thời lượng khoảng 5 - 8 phút (tương đương 1000 - 1500 chữ) cho chủ đề/tiêu đề: '{self.topic}'.
-                
-                YÊU CẦU NGHIÊM NGẶT ĐỂ KHÔNG BỊ SƠ SÀI:
-                1. Đào Sâu: Không viết hời hợt bề mặt. Phải có các luận điểm sắc bén, bóc tách vấn đề thành nhiều lớp (Layer), có ví dụ thực tiễn đời sống để người xem thấy mình trong đó.
-                2. Phân Cảnh Rõ Ràng: Chia kịch bản thành [Thời gian ước tính] - [Mô tả hình ảnh/Visual B-roll chi tiết] - [Lời thoại Voiceover chính xác từng chữ].
-                3. Tỷ lệ phân bổ: Dành 10% cho Hook giật gân, 70% cho Body (chia làm 3-4 luận điểm chính, bẻ gãy tư duy thông thường của khán giả), 20% cho CTA và giải pháp.
-                4. Cảm xúc: Tận dụng triệt để diễn biến tâm lý (Tò mò -> Đồng cảm -> Phẫn nộ -> Khao khát giải pháp) đã nêu trong DNA.
-                
-                Tuyệt đối không viết dưới dạng tóm tắt, hãy viết chính xác những từ mà Voice Talent sẽ đọc.
-                """
-                
-                response = self.model.generate_content(prompt)
-                self.result_signal.emit("script", response.text)
 
         except Exception as e:
             # Gửi lỗi ra màn hình chính
