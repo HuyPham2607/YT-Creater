@@ -9,6 +9,7 @@ from ui.components import DropZoneWidget
 import json
 import os
 import re
+from threads.scene_worker import SceneWorker
 
 class SceneBreakdownTab(QWidget):
     def __init__(self):
@@ -238,7 +239,7 @@ class SceneBreakdownTab(QWidget):
         header = self.table_scenes.horizontalHeader()
         header.setSectionResizeMode(0, QHeaderView.ResizeMode.Fixed) # STT cố định
         header.setSectionResizeMode(1, QHeaderView.ResizeMode.Fixed) # Level cố định
-        header.setSectionResizeMode(2, QHeaderView.ResizeMode.Stretch) # VO giãn tối đa
+        header.setSectionResizeMode(2, QHeaderView.ResizeMode.Stretch) # VO giãn
         header.setSectionResizeMode(3, QHeaderView.ResizeMode.Fixed)
         header.setSectionResizeMode(4, QHeaderView.ResizeMode.Fixed)
         header.setSectionResizeMode(5, QHeaderView.ResizeMode.Fixed)
@@ -247,9 +248,9 @@ class SceneBreakdownTab(QWidget):
         
         self.table_scenes.setColumnWidth(0, 50)
         self.table_scenes.setColumnWidth(1, 65)
-        self.table_scenes.setColumnWidth(3, 110)
-        self.table_scenes.setColumnWidth(4, 110)
-        self.table_scenes.setColumnWidth(5, 110)
+        self.table_scenes.setColumnWidth(3, 200) # Mở rộng để chứa Prompt
+        self.table_scenes.setColumnWidth(4, 200) # Mở rộng để chứa Prompt
+        self.table_scenes.setColumnWidth(5, 120)
         self.table_scenes.setColumnWidth(6, 55)
         self.table_scenes.setColumnWidth(7, 85)
 
@@ -601,11 +602,98 @@ class SceneBreakdownTab(QWidget):
         
         QMessageBox.information(self, "Thành công", f"Đã chia kịch bản thành {len(scenes)} scenes phân cảnh!")
 
+    def _get_current_scenes_from_table(self):
+        """Lấy danh sách các câu thoại hiện tại trên bảng"""
+        scenes = []
+        for row in range(self.table_scenes.rowCount()):
+            item_vo = self.table_scenes.item(row, 2)
+            if item_vo:
+                scenes.append(item_vo.text())
+        return scenes
+
     def _pre_scan(self):
-        QMessageBox.information(self, "Pre-scan", "Chức năng AI tự động quét nhân vật & bối cảnh đang được phát triển ở nhánh Worker.")
+        scenes = self._get_current_scenes_from_table()
+        if not scenes:
+            QMessageBox.warning(self, "Trống", "Bảng đang trống. Hãy Split Scenes trước khi Pre-scan!")
+            return
+
+        self.btn_scan.setEnabled(False)
+        self.btn_scan.setText("⏳ Đang quét...")
+
+        self.worker = SceneWorker("prescan", {"scenes": scenes})
+        self.worker.progress_signal.connect(lambda msg: print(msg)) # Có thể in ra thanh trạng thái nếu có
+        self.worker.result_signal.connect(self._handle_worker_result)
+        self.worker.error_signal.connect(lambda err: QMessageBox.critical(self, "Lỗi AI", err))
+        self.worker.finished_signal.connect(lambda: [self.btn_scan.setEnabled(True), self.btn_scan.setText("🔍 Pre-scan")])
+        self.worker.start()
 
     def _assign_assets(self):
-        QMessageBox.information(self, "Assign Assets", "Chức năng AI tự động gán nhân vật & bối cảnh đang được phát triển ở nhánh Worker.")
+        scenes = self._get_current_scenes_from_table()
+        if not scenes:
+            QMessageBox.warning(self, "Trống", "Bảng đang trống. Hãy Split Scenes trước khi Assign!")
+            return
+            
+        visual_style = self.txt_style.text().strip()
+
+        self.btn_assign.setEnabled(False)
+        self.btn_assign.setText("⏳ Đang Assign...")
+
+        self.worker = SceneWorker("assign", {"scenes": scenes, "style": visual_style})
+        self.worker.progress_signal.connect(lambda msg: print(msg))
+        self.worker.result_signal.connect(self._handle_worker_result)
+        self.worker.error_signal.connect(lambda err: QMessageBox.critical(self, "Lỗi AI", err))
+        self.worker.finished_signal.connect(lambda: [self.btn_assign.setEnabled(True), self.btn_assign.setText("⚡ Assign Assets")])
+        self.worker.start()
+
+    def _handle_worker_result(self, task_type, json_str):
+        try:
+            data = json.loads(json_str)
+            
+            if task_type == "prescan":
+                chars_count = data.get("characters_count", 0)
+                bgs_count = data.get("backgrounds_count", 0)
+                
+                # Cập nhật số liệu lên Dashboard
+                self.card_chars.lbl_val.setText(str(chars_count))
+                self.card_chars.lbl_val.setStyleSheet("font-size: 20px; font-weight: bold; color: #5A9BFF; font-family: monospace;")
+                
+                self.card_bgs.lbl_val.setText(str(bgs_count))
+                self.card_bgs.lbl_val.setStyleSheet("font-size: 20px; font-weight: bold; color: #9B7FFF; font-family: monospace;")
+                
+                QMessageBox.information(self, "Pre-scan Hoàn Tất", f"Tìm thấy:\n- {chars_count} nhân vật\n- {bgs_count} bối cảnh")
+                
+            elif task_type == "assign":
+                scenes_data = data.get("scenes", [])
+                assigned_count = 0
+                
+                for item in scenes_data:
+                    row_idx = item.get("id", 1) - 1 # id bắt đầu từ 1, row bắt đầu từ 0
+                    if 0 <= row_idx < self.table_scenes.rowCount():
+                        # Cập nhật Character
+                        char_item = self.table_scenes.item(row_idx, 3)
+                        char_item.setText(item.get("character", ""))
+                        char_item.setForeground(QBrush(QColor("#E8E8F0"))) # Chuyển màu hết pending
+                        char_item.setFont(QFont()) # Xóa in nghiêng
+                        
+                        # Cập nhật Background
+                        bg_item = self.table_scenes.item(row_idx, 4)
+                        bg_item.setText(item.get("background", ""))
+                        bg_item.setForeground(QBrush(QColor("#E8E8F0")))
+                        bg_item.setFont(QFont())
+                        
+                        # Cập nhật Camera
+                        cam_item = self.table_scenes.item(row_idx, 5)
+                        cam_item.setText(item.get("camera", ""))
+                        
+                        assigned_count += 1
+                
+                # Cập nhật tổng số đã assign lên Dashboard
+                self.card_assigned.lbl_val.setText(str(assigned_count))
+                self.card_assigned.lbl_val.setStyleSheet("font-size: 20px; font-weight: bold; color: #E8E8F0; font-family: monospace;")
+                QMessageBox.information(self, "Assign Hoàn Tất", f"Đã tạo prompts thành công cho {assigned_count} scenes!")
+                
+        except json.JSONDecodeError:
+            QMessageBox.critical(self, "Lỗi Dữ Liệu", "AI trả về dữ liệu không đúng chuẩn JSON.\n" + json_str)
 
     def _deduplicate(self):
         QMessageBox.information(self, "Deduplicate", "Chức năng tối ưu gộp phân cảnh đang được phát triển.")
