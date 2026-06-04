@@ -1,7 +1,8 @@
 import json
+import os
 from PyQt6.QtWidgets import (QWidget, QVBoxLayout, QHBoxLayout, QLabel, 
                              QLineEdit, QPushButton, QTextEdit, QGridLayout, 
-                             QComboBox, QScrollArea, QApplication, QFileDialog, QFrame, QSizePolicy)
+                             QComboBox, QScrollArea, QApplication, QFileDialog, QFrame, QSizePolicy, QMessageBox)
 from PyQt6.QtCore import Qt, QTimer
 from ui.components import DropZoneWidget
 from threads.topic_worker import TopicWorker
@@ -140,7 +141,8 @@ class TopicCard(QFrame):
         f_lay.addStretch()
         
         btn_s = QPushButton("★ Save", objectName="save_btn"); btn_s.setCursor(Qt.CursorShape.PointingHandCursor)
-        f_lay.addWidget(btn_s)
+        self.btn_save = btn_s # Expose the button
+        f_lay.addWidget(self.btn_save)
         main_lay.addWidget(foot_frm)
 
 
@@ -376,12 +378,60 @@ class TopicIdeatorTab(QWidget):
                 t_diff = str(t.get("difficulty_level", "MEDIUM"))
 
                 card = TopicCard(i, t_name, t_titles, t_angle, t_hook, t_tags, t_ctr, t_diff)
+                # Kết nối nút Save của card với hàm lưu vào profile
+                card.btn_save.clicked.connect(lambda checked=False, topic_data=t, card_widget=card: self._save_topic_to_profile(topic_data, card_widget))
                 self.results_layout.addWidget(card)
 
         except Exception as e:
             lbl_err = QLabel(f"❌ Lỗi parse JSON từ AI: {str(e)}\n\nData nhận được:\n{result_str}")
             lbl_err.setStyleSheet("color: #E84040; font-size: 14px;")
             self.results_layout.addWidget(lbl_err)
+
+    def _save_topic_to_profile(self, topic_data, card_widget):
+        ACTIVE_PROFILE_FILE = "active_profile.json"
+        if not os.path.exists(ACTIVE_PROFILE_FILE):
+            QMessageBox.warning(self, "Chưa có Profile", "Vui lòng chọn và áp dụng một Profile đang hoạt động trước khi lưu.")
+            return
+
+        try:
+            with open(ACTIVE_PROFILE_FILE, 'r', encoding='utf-8') as f:
+                profile_data = json.load(f)
+        except (json.JSONDecodeError, FileNotFoundError):
+            QMessageBox.critical(self, "Lỗi Profile", f"Không thể đọc hoặc file '{ACTIVE_PROFILE_FILE}' bị lỗi.")
+            return
+
+        # Chuẩn bị dữ liệu topic để lưu, đổi 'topic_name' thành 'title' để khớp với Tool 2
+        topic_to_save = topic_data.copy()
+        if 'topic_name' in topic_to_save:
+            topic_to_save['title'] = topic_to_save.pop('topic_name')
+        
+        # Thêm trường script rỗng để Tool 1 có thể điền vào sau
+        topic_to_save['script'] = None 
+
+        if "topics" not in profile_data or not isinstance(profile_data.get("topics"), list):
+            profile_data["topics"] = []
+
+        # Kiểm tra trùng lặp dựa trên title
+        existing_titles = [t.get("title") for t in profile_data["topics"] if t.get("title")]
+        if topic_to_save.get("title") in existing_titles:
+            QMessageBox.information(self, "Đã tồn tại", f"Topic '{topic_to_save.get('title')}' đã được lưu vào profile rồi.")
+            card_widget.btn_save.setText("✓ Đã lưu")
+            card_widget.btn_save.setEnabled(False)
+            card_widget.btn_save.setStyleSheet("background: #282840; color: #8A8AA0; border: none; border-radius: 6px; padding: 6px 16px; font-weight: bold; font-size: 12px;")
+            return
+
+        profile_data["topics"].append(topic_to_save)
+
+        try:
+            with open(ACTIVE_PROFILE_FILE, 'w', encoding='utf-8') as f:
+                json.dump(profile_data, f, ensure_ascii=False, indent=4)
+            
+            card_widget.btn_save.setText("✓ Đã lưu")
+            card_widget.btn_save.setEnabled(False)
+            card_widget.btn_save.setStyleSheet("background: #282840; color: #8A8AA0; border: none; border-radius: 6px; padding: 6px 16px; font-weight: bold; font-size: 12px;")
+            QMessageBox.information(self, "Thành công", f"Đã lưu topic '{topic_to_save.get('title')}' vào Profile đang hoạt động.")
+        except Exception as e:
+            QMessageBox.critical(self, "Lỗi Lưu File", f"Không thể ghi vào file '{ACTIVE_PROFILE_FILE}':\n{e}")
 
     def _on_worker_finished(self):
         self.btn_gen.setEnabled(True)

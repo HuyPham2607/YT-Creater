@@ -1,9 +1,14 @@
 === LỖI HỆ THỐNG ===
 Traceback (most recent call last):
-  File "C:\newapp\main.py", line 64, in main
-    from ui.main_window import MainWindow
-  File "C:\newapp\ui\main_window.py", line 7, in <module>
-    from ui.tab_script_writer import ScriptWriterTab
-  File "C:\newapp\ui\tab_script_writer.py", line 8, in <module>
-    from threads.research_worker import ResearchWorker
-ModuleNotFoundError: No module named 'threads.research_worker'
+  File "F:\RxTools\YT-Creater\main.py", line 65, in main
+    window = MainWindow()
+  File "F:\RxTools\YT-Creater\ui\main_window.py", line 122, in __init__
+    self.content_area.addWidget(SceneBreakdownTab())      # Index 2
+                                ~~~~~~~~~~~~~~~~~^^
+  File "F:\RxTools\YT-Creater\ui\tab_scene_breakdown.py", line 249, in __init__
+    self._populate_mock_scenes() # Đổ dữ liệu mẫu 40 dòng vào bảng
+    ~~~~~~~~~~~~~~~~~~~~~~~~~~^^
+  File "F:\RxTools\YT-Creater\ui\tab_scene_breakdown.py", line 439, in _populate_mock_scenes
+    item_stt.setStyleSheet("color: #E8742A; font-weight: bold;")
+    ^^^^^^^^^^^^^^^^^^^^^^
+AttributeError: 'QTableWidgetItem' object has no attribute 'setStyleSheet'

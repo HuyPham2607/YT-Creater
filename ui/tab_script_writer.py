@@ -1,7 +1,10 @@
+import os
+import json
 from PyQt6.QtWidgets import (QWidget, QVBoxLayout, QHBoxLayout, QLabel,
                              QLineEdit, QPushButton, QTextEdit, QGridLayout,
                              QComboBox, QScrollArea, QSpinBox,
-                             QProgressBar, QSplitter, QSizePolicy)
+                             QProgressBar, QSplitter, QSizePolicy,
+                             QMessageBox, QInputDialog, QDialog, QListWidget, QDialogButtonBox)
 from PyQt6.QtCore import Qt
 from ui.components import DropZoneWidget
 from threads.script_worker import ScriptWorker
@@ -17,6 +20,7 @@ class ScriptWriterTab(QWidget):
         self.dna_content     = ""
         self._research_notes = ""   # filled after research completes
         self._last_config    = {}   # saved config so Write uses same params
+        self.current_topic_title = ""
 
         # ── Root layout ───────────────────────────────────────────
         main_lay = QVBoxLayout(self)
@@ -71,10 +75,18 @@ class ScriptWriterTab(QWidget):
         h_topic = QHBoxLayout()
         self.txt_topic = QLineEdit()
         self.txt_topic.setPlaceholderText("VD: Bạn Hiểu Vì Sao 10 Năm Tiết Kiệm = Đứng Yên Tại Chỗ")
-        self.btn_get_topic = QPushButton("Lấy từ Tool 0")
+        
+        self.btn_get_topic = QPushButton("📂 Load Topic")
         self.btn_get_topic.setObjectName("btn_sec")
+        self.btn_get_topic.clicked.connect(self._load_topic_from_profile)
+        
+        self.btn_save_script = QPushButton("💾 Lưu Kịch Bản")
+        self.btn_save_script.setObjectName("btn_primary")
+        self.btn_save_script.clicked.connect(self._save_script_to_profile)
+        
         h_topic.addWidget(self.txt_topic)
         h_topic.addWidget(self.btn_get_topic)
+        h_topic.addWidget(self.btn_save_script)
         lay.addLayout(h_topic)
 
         # --- CÀI ĐẶT ---
@@ -432,3 +444,131 @@ class ScriptWriterTab(QWidget):
         self._set_buttons_busy(False)
         self.progress_bar.setValue(100)
         self.lbl_status.setText("✅ Hoàn thành")
+
+    def _load_topic_from_profile(self):
+        ACTIVE_PROFILE_FILE = "active_profile.json"
+        if not os.path.exists(ACTIVE_PROFILE_FILE):
+            QMessageBox.warning(self, "Chưa có Profile", "Vui lòng chọn một Profile đang hoạt động trước.")
+            return
+        try:
+            with open(ACTIVE_PROFILE_FILE, 'r', encoding='utf-8') as f:
+                profile_data = json.load(f)
+        except (json.JSONDecodeError, FileNotFoundError):
+            QMessageBox.critical(self, "Lỗi Profile", "Không thể đọc file active_profile.json.")
+            return
+            
+        topics = profile_data.get("topics", [])
+        if not topics:
+            QMessageBox.information(self, "Trống", "Profile hiện tại chưa có topic nào được lưu từ Tool 0.")
+            return
+            
+        selection_items = []
+        self.topic_map = {} 
+        
+        for t in topics:
+            topic_name = t.get("title", "Không tên")
+            sub_titles = t.get("titles", [])
+            for st in sub_titles:
+                st_text = st.get("text", "")
+                if st_text:
+                    display_text = f"[{topic_name[:30]}...] {st_text}"
+                    selection_items.append(display_text)
+                    self.topic_map[display_text] = {
+                        "topic_title": topic_name,
+                        "selected_subtitle": st_text
+                    }
+            
+        if not selection_items:
+            QMessageBox.information(self, "Trống", "Không tìm thấy tiêu đề phụ nào trong các topic đã lưu.")
+            return
+            
+        dialog = QDialog(self)
+        dialog.setWindowTitle("Chọn Tiêu Đề")
+        dialog.resize(600, 450)
+        dialog.setStyleSheet("""
+            QDialog { background-color: #0F0F18; border: 1px solid #252535; }
+            QLabel { color: #E8E8F0; font-size: 14px; font-weight: bold; margin-bottom: 5px; }
+            QListWidget { background-color: #18182B; border: 1px solid #282840; border-radius: 8px; padding: 5px; color: #E8E8F0; font-size: 14px; outline: none; }
+            QListWidget::item { padding: 12px; border-bottom: 1px solid #252535; }
+            QListWidget::item:hover { background-color: #202035; }
+            QListWidget::item:selected { background-color: rgba(90, 79, 204, 0.3); border-radius: 6px; border: 1px solid #5A4FCC; color: #FFF; }
+            QPushButton { background: #282840; color: #D0D0E0; border-radius: 6px; padding: 8px 20px; font-weight: bold; font-size: 13px; }
+            QPushButton:hover { background: #353545; }
+        """)
+        
+        layout = QVBoxLayout(dialog)
+        layout.addWidget(QLabel("Chọn 1 tiêu đề (từ các Topic đã lưu):"))
+        
+        list_widget = QListWidget()
+        list_widget.setWordWrap(True)
+        list_widget.addItems(selection_items)
+        layout.addWidget(list_widget)
+        
+        btn_box = QDialogButtonBox(QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel)
+        btn_box.accepted.connect(dialog.accept)
+        btn_box.rejected.connect(dialog.reject)
+        
+        btn_ok = btn_box.button(QDialogButtonBox.StandardButton.Ok)
+        btn_ok.setText("Chọn Tiêu Đề")
+        btn_ok.setStyleSheet("background: #E8742A; color: #000; border-radius: 6px; padding: 8px 20px; font-weight: bold;")
+        btn_box.button(QDialogButtonBox.StandardButton.Cancel).setText("Hủy")
+        
+        layout.addWidget(btn_box)
+        
+        if dialog.exec() == QDialog.DialogCode.Accepted:
+            current_item = list_widget.currentItem()
+            if current_item:
+                selected_item = current_item.text()
+                mapped_data = self.topic_map.get(selected_item)
+                if mapped_data:
+                    self.txt_topic.setText(mapped_data["selected_subtitle"])
+                    self.current_topic_title = mapped_data["topic_title"]
+
+    def _save_script_to_profile(self):
+        script_title = self.txt_topic.text().strip()
+        if not script_title:
+            QMessageBox.warning(self, "Cảnh báo", "Vui lòng nhập hoặc chọn Chủ đề video trước khi lưu!")
+            return
+
+        topic_title_to_save = getattr(self, 'current_topic_title', script_title)
+        if not topic_title_to_save:
+            topic_title_to_save = script_title
+
+        script_content = self.txt_output.toPlainText().strip()
+        if not script_content:
+            QMessageBox.warning(self, "Lỗi", "Không tìm thấy nội dung kịch bản để lưu. Hãy đảm bảo bạn đã tạo kịch bản xong!")
+            return
+            
+        research_content = self._research_notes
+
+        ACTIVE_PROFILE_FILE = "active_profile.json"
+        try:
+            with open(ACTIVE_PROFILE_FILE, 'r', encoding='utf-8') as f:
+                profile_data = json.load(f)
+        except Exception:
+            profile_data = {"topics": []}
+            
+        topics = profile_data.get("topics", [])
+        topic_found = False
+        for t in topics:
+            if t.get("title") == topic_title_to_save:
+                t["script"] = {
+                    "title": script_title,
+                    "content": script_content,
+                    "research": research_content
+                }
+                topic_found = True
+                break
+                
+        if not topic_found:
+            profile_data.setdefault("topics", []).append({
+                "title": topic_title_to_save,
+                "script": {"title": script_title, "content": script_content, "research": research_content}
+            })
+            
+        try:
+            with open(ACTIVE_PROFILE_FILE, 'w', encoding='utf-8') as f:
+                json.dump(profile_data, f, ensure_ascii=False, indent=4)
+            QMessageBox.information(self, "Thành công", f"Đã lưu kịch bản và research cho topic:\n'{topic_title_to_save[:30]}...' \nvào Profile!")
+        except Exception as e:
+            QMessageBox.critical(self, "Lỗi", f"Không thể lưu file:\n{e}")
