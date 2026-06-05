@@ -1,15 +1,99 @@
 import json
 import os
+import re
 from PyQt6.QtWidgets import (QWidget, QVBoxLayout, QHBoxLayout, QLabel, 
                              QPushButton, QGridLayout, QFrame, QScrollArea, 
                              QSizePolicy, QDialog, QLineEdit, QTextEdit, QMessageBox)
-from PyQt6.QtCore import Qt, pyqtSignal
+from PyQt6.QtCore import Qt, pyqtSignal, QThread
 from PyQt6.QtGui import QCursor
 from ui.components import DropZoneWidget
+from dotenv import load_dotenv
+
+try:
+    from google import genai
+    from google.genai import types
+except ImportError:
+    genai = None
+    types = None
+
+load_dotenv()
 
 # Đường dẫn file lưu trữ database
 DB_FILE = "profiles.json"
 ACTIVE_PROFILE_FILE = "active_profile.json" # File lưu cấu hình khi bấm "Apply to All Tools"
+
+class ProfileExtractWorker(QThread):
+    result_signal = pyqtSignal(str)
+    error_signal = pyqtSignal(str)
+    finished_signal = pyqtSignal()
+
+    def __init__(self, style_content, dna_content, topic_content):
+        super().__init__()
+        self.style_content = style_content
+        self.dna_content = dna_content
+        self.topic_content = topic_content
+
+    def run(self):
+        if genai is None:
+            self.error_signal.emit("❌ Thư viện 'google-genai' chưa được cài đặt.")
+            self.finished_signal.emit()
+            return
+
+        api_key = os.getenv("GEMINI_API_KEY")
+        if not api_key:
+            self.error_signal.emit("❌ Không tìm thấy GEMINI_API_KEY trong file .env!")
+            self.finished_signal.emit()
+            return
+
+        client = genai.Client(api_key=api_key)
+        model_name = "gemini-3.5-flash"
+
+        try:
+            prompt = f"""You are an AI assistant helping to set up a YouTube channel profile.
+Analyze the following provided context documents (Style Guide, DNA, Topic) and extract key information into a JSON object.
+Output ONLY a valid JSON object matching the requested schema. No markdown, no conversational filler.
+
+Schema:
+{{
+  "name": "Channel name (if found, otherwise invent a suitable short one based on context)",
+  "niche": "Main topic/niche of the channel",
+  "visual": "Visual style (e.g. 2D Cartoon, Anime, Cinematic, Dark Academia)",
+  "lang": "Primary language of the content",
+  "pov": "Point of View (e.g. Ngôi 2 (Bạn), Ngôi 1 (Tôi), Ngôi 3)",
+  "char_style": "Brief description of the main character/mascot style",
+  "bg_style": "Brief description of the background/environment style"
+}}
+
+--- STYLE GUIDE ---
+{self.style_content}
+
+--- DNA ---
+{self.dna_content}
+
+--- TOPIC ---
+{self.topic_content}
+"""
+
+            gen_config = types.GenerateContentConfig(
+                temperature=0.2
+            )
+
+            response = client.models.generate_content(
+                model=model_name,
+                contents=prompt,
+                config=gen_config
+            )
+
+            match = re.search(r'\{.*\}', response.text, re.DOTALL)
+            if match:
+                self.result_signal.emit(match.group(0))
+            else:
+                self.error_signal.emit("AI không trả về JSON hợp lệ.")
+                
+        except Exception as e:
+            self.error_signal.emit(f"Lỗi AI: {str(e)}")
+        finally:
+            self.finished_signal.emit()
 
 # =======================================================
 # 1. CỬA SỔ POP-UP: TẠO MỚI & CHỈNH SỬA (Giữ nguyên logic của bạn)
@@ -138,18 +222,37 @@ class ProfileDialog(QDialog):
         main_lay.addLayout(act_lay)
 
     def auto_extract_data(self):
+        if not (self.style_content or self.dna_content or self.topic_content):
+            QMessageBox.warning(self, "Thiếu dữ liệu", "Vui lòng upload ít nhất 1 file (Style, DNA hoặc Topic) trước khi trích xuất!")
+            return
+
         self.btn_extract.setText("⏳ Đang trích xuất...")
         self.btn_extract.setEnabled(False)
-        QMessageBox.information(self, "Auto Extract", "Hệ thống đang mô phỏng gọi AI API đọc nội dung...")
         
-        self.txt_name.setText("Kênh Trinh Thám Lịch Sử")
-        self.txt_niche.setText("Lịch Sử, Bí Ẩn, Án Mạng")
-        self.txt_visual.setText("Dark Academia, Noir")
-        self.txt_lang.setText("English, Tiếng Việt")
-        self.txt_pov.setText("Ngôi 3 (Người kể chuyện)")
-        self.txt_char.setText("Nhân vật mang phong cách thế kỷ 19, áo măng tô...")
-        self.txt_bg.setText("Thành phố sương mù London cổ kính...")
-        
+        self.extract_worker = ProfileExtractWorker(self.style_content, self.dna_content, self.topic_content)
+        self.extract_worker.result_signal.connect(self._on_extract_result)
+        self.extract_worker.error_signal.connect(self._on_extract_error)
+        self.extract_worker.finished_signal.connect(self._on_extract_finished)
+        self.extract_worker.start()
+
+    def _on_extract_result(self, json_str):
+        try:
+            data = json.loads(json_str)
+            if data.get("name"): self.txt_name.setText(data.get("name"))
+            if data.get("niche"): self.txt_niche.setText(data.get("niche"))
+            if data.get("visual"): self.txt_visual.setText(data.get("visual"))
+            if data.get("lang"): self.txt_lang.setText(data.get("lang"))
+            if data.get("pov"): self.txt_pov.setText(data.get("pov"))
+            if data.get("char_style"): self.txt_char.setText(data.get("char_style"))
+            if data.get("bg_style"): self.txt_bg.setText(data.get("bg_style"))
+            QMessageBox.information(self, "Thành công", "Đã trích xuất dữ liệu thành công từ file Context!")
+        except Exception as e:
+            QMessageBox.critical(self, "Lỗi", f"Lỗi parse JSON: {e}\n{json_str}")
+
+    def _on_extract_error(self, err_msg):
+        QMessageBox.critical(self, "Lỗi trích xuất", err_msg)
+
+    def _on_extract_finished(self):
         self.btn_extract.setText("⚡ Auto Extract")
         self.btn_extract.setEnabled(True)
 

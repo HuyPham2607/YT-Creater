@@ -46,7 +46,13 @@ class SceneWorker(QThread):
             if self.task_type == "prescan":
                 self._run_prescan(client, model_name, scenes)
             elif self.task_type == "assign":
-                self._run_assign(client, model_name, scenes, self.config.get("style", ""))
+                self._run_assign(
+                    client, 
+                    model_name, 
+                    scenes, 
+                    self.config.get("characters", ""),
+                    self.config.get("backgrounds", "")
+                )
 
         except Exception as e:
             self.error_signal.emit(f"❌ Lỗi: {str(e)}")
@@ -87,38 +93,43 @@ class SceneWorker(QThread):
         json_str = self._extract_json(response.text)
         self.result_signal.emit("prescan", json_str)
 
-    def _run_assign(self, client, model_name, scenes, visual_style):
-        self.progress_signal.emit("⚡ AI đang đóng vai Art Director để viết Prompt...")
+    def _run_assign(self, client, model_name, scenes, characters, backgrounds):
+        self.progress_signal.emit("⚡ AI đang đóng vai Art Director để gán Nhân vật và Bối cảnh...")
         
         # Prepare input data
         input_data = []
         for idx, text in enumerate(scenes):
             input_data.append({"id": idx + 1, "VO": text})
             
-        system_prompt = """You are an elite Art Director for an AI anime production pipeline. Your task is to generate English image generation prompts for 'character' and 'background' for each scene ID based on the provided Channel DNA and Style Guide.
+        system_prompt = f"""You are an elite Art Director for an AI anime production pipeline. Your task is to assign exactly ONE 'character' and ONE 'background' to each scene based on the VO text.
 
-        CRITICAL RULES FOR VISUAL CONSISTENCY:
-        1. CHARACTER CONSISTENCY: Keep the character's core physical appearance identical across all scenes, but alter their action and facial expression to match the emotional tone of the specific VO text.
-        2. BACKGROUND CONSISTENCY: If a location is repeated across different scene IDs, use the exact same base environmental description, changing only the camera angle or lighting if necessary.
+        CRITICAL RULES:
+        1. CHARACTER: You must select the character's name EXACTLY from this list:
+        {characters}
+        If multiple characters are in the scene, pick the main one. If no character is visible, use "none".
+        
+        2. BACKGROUND: You must select the background's name EXACTLY from this list:
+        {backgrounds}
+        
         3. CAMERA ANGLE: Assign a filmmaking camera tag (e.g., Close-up, Wide shot, Extreme Close-up, Establishing shot) based on the dramatic weight of the VO.
         
-        All prompts MUST be in English. Output format MUST be a single raw JSON matching the provided schema:
-        {
+        Output format MUST be a single raw JSON matching the provided schema:
+        {{
           "scenes": [
-            {
+            {{
               "id": 1,
               "character": "...",
               "background": "...",
               "camera": "..."
-            }
+            }}
           ]
-        }"""
+        }}"""
 
-        user_prompt = f"Visual Style to apply: {visual_style}\n\nScenes to process:\n{json.dumps(input_data, ensure_ascii=False, indent=2)}\n\nGenerate the JSON output."
+        user_prompt = f"Scenes to process:\n{json.dumps(input_data, ensure_ascii=False, indent=2)}\n\nGenerate the JSON output."
 
         gen_config = types.GenerateContentConfig(
             system_instruction=system_prompt,
-            temperature=0.4
+            temperature=0.1
         )
 
         response = client.models.generate_content(

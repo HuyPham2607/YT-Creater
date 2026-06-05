@@ -1,5 +1,5 @@
 from PyQt6.QtWidgets import (QMainWindow, QWidget, QHBoxLayout, QVBoxLayout, 
-                             QPushButton, QLabel, QStackedWidget, QFrame, QButtonGroup)
+                             QPushButton, QLabel, QStackedWidget, QFrame, QButtonGroup, QMessageBox)
 from PyQt6.QtCore import Qt, pyqtSignal
 
 # Import ĐẦY ĐỦ các màn hình
@@ -117,13 +117,21 @@ class MainWindow(QMainWindow):
         main_layout.addWidget(self.content_area)
 
         # ---------------- NẠP CÁC TRANG VÀO HỆ THỐNG ----------------
-        self.content_area.addWidget(TopicIdeatorTab())        # Index 0
-        self.content_area.addWidget(ScriptWriterTab())        # Index 1
-        self.content_area.addWidget(SceneBreakdownTab())      # Index 2
-        self.content_area.addWidget(AssetPromptsTab())        # Index 3
-        self.content_area.addWidget(CameraMovementTab())      # Index 4
-        self.content_area.addWidget(ThumbnailTab())           # Index 5
-        self.content_area.addWidget(VideoMetadataTab())       # Index 6
+        self.tab_topic = TopicIdeatorTab()
+        self.tab_script = ScriptWriterTab()
+        self.tab_scene = SceneBreakdownTab()
+        self.tab_asset = AssetPromptsTab()
+        self.tab_camera = CameraMovementTab()
+        self.tab_thumb = ThumbnailTab()
+        self.tab_meta = VideoMetadataTab()
+
+        self.content_area.addWidget(self.tab_topic)        # Index 0
+        self.content_area.addWidget(self.tab_script)       # Index 1
+        self.content_area.addWidget(self.tab_scene)        # Index 2
+        self.content_area.addWidget(self.tab_asset)        # Index 3
+        self.content_area.addWidget(self.tab_camera)       # Index 4
+        self.content_area.addWidget(self.tab_thumb)        # Index 5
+        self.content_area.addWidget(self.tab_meta)         # Index 6
         
         page_qc = QWidget()
         lay_qc = QVBoxLayout(page_qc)
@@ -131,7 +139,8 @@ class MainWindow(QMainWindow):
         self.content_area.addWidget(page_qc)                  # Index 7
         
         # --- NẠP TAB G-LABS VÀO ĐÚNG INDEX 8 ---
-        self.content_area.addWidget(GLabsAutomationTab())     # Index 8
+        self.tab_glabs = GLabsAutomationTab()
+        self.content_area.addWidget(self.tab_glabs)           # Index 8
         
         # Nạp trang Profile Manager (Sẽ ở Index 9, không nằm trong Menu chính)
         self.page_profile = ProfileManagerTab()
@@ -140,6 +149,10 @@ class MainWindow(QMainWindow):
         # KẾT NỐI SỰ KIỆN ÁP DỤNG PROFILE
         self.page_profile.profile_applied.connect(self.on_profile_applied)
         
+        # Kết nối luồng Data giữa Tool 2 và Tool 3
+        self.tab_scene.transfer_to_tool3.connect(self.on_transfer_to_tool3)
+        self.tab_asset.request_load_tool2.connect(self.on_request_load_tool2)
+
         # Tự động nạp profile khi khởi động nếu đã có file
         self.load_active_profile()
 
@@ -170,3 +183,17 @@ class MainWindow(QMainWindow):
             self.nav_group.checkedButton().setChecked(False)
             self.nav_group.setExclusive(True)
         self.content_area.setCurrentWidget(self.page_profile)
+
+    def on_transfer_to_tool3(self, chars, bgs):
+        self.tab_asset.load_assets_data(chars, bgs)
+        self.content_area.setCurrentIndex(3)
+        self.nav_group.button(3).setChecked(True)
+
+    def on_request_load_tool2(self):
+        chars = self.tab_scene.txt_prescan_chars.toPlainText().strip()
+        bgs = self.tab_scene.txt_prescan_bgs.toPlainText().strip()
+        if not chars and not bgs:
+            QMessageBox.warning(self, "Trống", "Bên Tool 2 hiện chưa có dữ liệu Characters/Backgrounds (Pre-scan)!")
+            return
+        self.tab_asset.load_assets_data(chars, bgs)
+        QMessageBox.information(self, "Thành công", "Đã nạp danh sách Characters và Backgrounds từ Tool 2!")

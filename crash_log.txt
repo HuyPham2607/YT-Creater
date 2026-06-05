@@ -2,13 +2,7 @@
 Traceback (most recent call last):
   File "F:\RxTools\YT-Creater\main.py", line 65, in main
     window = MainWindow()
-  File "F:\RxTools\YT-Creater\ui\main_window.py", line 122, in __init__
-    self.content_area.addWidget(SceneBreakdownTab())      # Index 2
-                                ~~~~~~~~~~~~~~~~~^^
-  File "F:\RxTools\YT-Creater\ui\tab_scene_breakdown.py", line 249, in __init__
-    self._populate_mock_scenes() # Đổ dữ liệu mẫu 40 dòng vào bảng
-    ~~~~~~~~~~~~~~~~~~~~~~~~~~^^
-  File "F:\RxTools\YT-Creater\ui\tab_scene_breakdown.py", line 439, in _populate_mock_scenes
-    item_stt.setStyleSheet("color: #E8742A; font-weight: bold;")
-    ^^^^^^^^^^^^^^^^^^^^^^
-AttributeError: 'QTableWidgetItem' object has no attribute 'setStyleSheet'
+  File "F:\RxTools\YT-Creater\ui\main_window.py", line 145, in __init__
+    self.tab_scene.transfer_to_tool3.connect(self.on_transfer_to_tool3)
+    ^^^^^^^^^^^^^^
+AttributeError: 'MainWindow' object has no attribute 'tab_scene'

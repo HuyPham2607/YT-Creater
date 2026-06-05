@@ -3,7 +3,7 @@ from PyQt6.QtWidgets import (QWidget, QVBoxLayout, QHBoxLayout, QLabel,
                              QComboBox, QScrollArea, QFrame, QSplitter,
                              QInputDialog, QMessageBox, QTableWidget, 
                              QTableWidgetItem, QHeaderView, QTabBar)
-from PyQt6.QtCore import Qt
+from PyQt6.QtCore import Qt, pyqtSignal
 from PyQt6.QtGui import QCursor, QColor, QBrush, QFont
 from ui.components import DropZoneWidget
 import json
@@ -12,6 +12,8 @@ import re
 from threads.scene_worker import SceneWorker
 
 class SceneBreakdownTab(QWidget):
+    transfer_to_tool3 = pyqtSignal(str, str)
+
     def __init__(self):
         super().__init__()
         main_lay = QVBoxLayout(self)
@@ -185,7 +187,55 @@ class SceneBreakdownTab(QWidget):
         act_lay.addWidget(lbl_cast); act_lay.addWidget(self.cmb_cast)
         
         lay.addLayout(act_lay)
+        # ====================================================================
+        # 🌟 NEW COMPONENT: PRE-SCAN PANEL (ẨN MẶC ĐỊNH, HIỆN KHI QUÉT XONG)
+        # ====================================================================
+        self.prescan_panel = QFrame()
+        self.prescan_panel.setStyleSheet("QFrame { background: #0F0F18; border: 1px solid #252535; border-radius: 8px; }")
+        self.prescan_panel.hide() # Ẩn đi cho đến khi ấn nút Pre-scan
+        
+        ps_lay = QVBoxLayout(self.prescan_panel)
+        ps_lay.setContentsMargins(16, 12, 16, 12)
+        ps_lay.setSpacing(10)
+        
+        lbl_ps_title = QLabel("PRE-SCAN: DUYỆT DANH SÁCH TRƯỚC KHI ASSIGN")
+        lbl_ps_title.setStyleSheet("color: #9B7FFF; font-weight: bold; font-size: 11px; letter-spacing: 1px;")
+        ps_lay.addWidget(lbl_ps_title)
+        
+        ps_grid = QHBoxLayout()
+        ps_grid.setSpacing(20)
+        
+        # Cột Trái: Nhân vật
+        ps_char_lay = QVBoxLayout()
+        ps_char_lay.setSpacing(4)
+        lbl_ps_char = QLabel("NHÂN VẬT (mỗi dòng 1 tên, kebab-case)")
+        lbl_ps_char.setStyleSheet("color: #3AD68A; font-weight: bold; font-size: 11px;")
+        self.txt_prescan_chars = QTextEdit()
+        self.txt_prescan_chars.setStyleSheet("background: transparent; border: none; color: #5A9BFF; font-family: monospace; font-size: 13px;")
+        self.txt_prescan_chars.setFixedHeight(120)
+        ps_char_lay.addWidget(lbl_ps_char)
+        ps_char_lay.addWidget(self.txt_prescan_chars)
+        
+        # Cột Phải: Bối cảnh
+        ps_bg_lay = QVBoxLayout()
+        ps_bg_lay.setSpacing(4)
+        lbl_ps_bg = QLabel("BỐI CẢNH (mỗi dòng 1 tên, kebab-case)")
+        lbl_ps_bg.setStyleSheet("color: #5A9BFF; font-weight: bold; font-size: 11px;")
+        self.txt_prescan_bgs = QTextEdit()
+        self.txt_prescan_bgs.setStyleSheet("background: transparent; border: none; color: #5A9BFF; font-family: monospace; font-size: 13px;")
+        self.txt_prescan_bgs.setFixedHeight(120)
+        ps_bg_lay.addWidget(lbl_ps_bg)
+        ps_bg_lay.addWidget(self.txt_prescan_bgs)
+        
+        ps_grid.addLayout(ps_char_lay)
+        ps_grid.addLayout(ps_bg_lay)
+        ps_lay.addLayout(ps_grid)
+        
+        lay.addWidget(self.prescan_panel)
 
+        # ====================================================================
+        # 🌟 STATS DASHBOARD & STORYBOARD GRID (Code cũ tiếp nối ở đây...)
+        # ====================================================================
         # ====================================================================
         # 🌟 NEW COMPONENT: STATS DASHBOARD & STORYBOARD GRID (WEB REPLICATED)
         # ====================================================================
@@ -267,18 +317,19 @@ class SceneBreakdownTab(QWidget):
         btn_glabs_txt.setStyleSheet("background: #171724; color: #A1A1AA; border: 1px solid #252535; border-radius: 4px; padding: 6px 14px; font-weight: bold; font-size: 12px;")
         btn_vo_only = QPushButton("⬇ VO Only")
         btn_vo_only.setStyleSheet("background: rgba(90,155,255,0.1); color: #5A9BFF; border: 1px solid rgba(90,155,255,0.2); border-radius: 4px; padding: 6px 14px; font-weight: bold; font-size: 12px;")
-        btn_to_tool3 = QPushButton("→ Assets sang Tool 3")
-        btn_to_tool3.setStyleSheet("background: rgba(58,214,138,0.1); color: #3AD68A; border: 1px solid rgba(58,214,138,0.2); border-radius: 4px; padding: 6px 16px; font-weight: bold; font-size: 12px;")
+        self.btn_to_tool3 = QPushButton("→ Assets sang Tool 3")
+        self.btn_to_tool3.setStyleSheet("background: rgba(58,214,138,0.1); color: #3AD68A; border: 1px solid rgba(58,214,138,0.2); border-radius: 4px; padding: 6px 16px; font-weight: bold; font-size: 12px;")
         
         btn_xlsx.setCursor(Qt.CursorShape.PointingHandCursor)
         btn_glabs_txt.setCursor(Qt.CursorShape.PointingHandCursor)
         btn_vo_only.setCursor(Qt.CursorShape.PointingHandCursor)
-        btn_to_tool3.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.btn_to_tool3.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.btn_to_tool3.clicked.connect(self._transfer_to_tool3)
 
         tbl_actions_lay.addWidget(btn_xlsx)
         tbl_actions_lay.addWidget(btn_glabs_txt)
         tbl_actions_lay.addWidget(btn_vo_only)
-        tbl_actions_lay.addWidget(btn_to_tool3)
+        tbl_actions_lay.addWidget(self.btn_to_tool3)
         tbl_actions_lay.addStretch()
         lay.addLayout(tbl_actions_lay)
 
@@ -633,12 +684,21 @@ class SceneBreakdownTab(QWidget):
             QMessageBox.warning(self, "Trống", "Bảng đang trống. Hãy Split Scenes trước khi Assign!")
             return
             
-        visual_style = self.txt_style.text().strip()
+        prescan_chars = self.txt_prescan_chars.toPlainText().strip()
+        prescan_bgs = self.txt_prescan_bgs.toPlainText().strip()
+
+        if not prescan_chars or not prescan_bgs:
+            QMessageBox.warning(self, "Thiếu Dữ Liệu", "Danh sách Nhân vật hoặc Bối cảnh đang trống. Vui lòng chạy Pre-scan trước hoặc nhập tay vào!")
+            return
 
         self.btn_assign.setEnabled(False)
         self.btn_assign.setText("⏳ Đang Assign...")
 
-        self.worker = SceneWorker("assign", {"scenes": scenes, "style": visual_style})
+        self.worker = SceneWorker("assign", {
+            "scenes": scenes, 
+            "characters": prescan_chars,
+            "backgrounds": prescan_bgs
+        })
         self.worker.progress_signal.connect(lambda msg: print(msg))
         self.worker.result_signal.connect(self._handle_worker_result)
         self.worker.error_signal.connect(lambda err: QMessageBox.critical(self, "Lỗi AI", err))
@@ -652,6 +712,32 @@ class SceneBreakdownTab(QWidget):
             if task_type == "prescan":
                 chars_count = data.get("characters_count", 0)
                 bgs_count = data.get("backgrounds_count", 0)
+                chars_list = data.get("characters_list", [])
+                bgs_list = data.get("backgrounds_list", [])
+                
+                # --- HÀM PHỤ: Chuyển đổi tên sang kebab-case ---
+                def to_kebab_case(text):
+                    # Chuyển tiếng Việt có dấu thành không dấu cơ bản
+                    text = re.sub(r'[àáạảãâầấậẩẫăằắặẳẵ]', 'a', text.lower())
+                    text = re.sub(r'[èéẹẻẽêềếệểễ]', 'e', text)
+                    text = re.sub(r'[ìíịỉĩ]', 'i', text)
+                    text = re.sub(r'[òóọỏõôồốộổỗơờớợởỡ]', 'o', text)
+                    text = re.sub(r'[ùúụủũưừứựửữ]', 'u', text)
+                    text = re.sub(r'[ỳýỵỷỹ]', 'y', text)
+                    text = re.sub(r'[đ]', 'd', text)
+                    # Thay khoảng trắng và ký tự đặc biệt bằng dấu gạch ngang
+                    text = re.sub(r'[^a-z0-9]+', '-', text).strip('-')
+                    return text
+
+                # Format danh sách để hiển thị lên 2 ô TextEdit
+                formatted_chars = "\n".join([to_kebab_case(c) for c in chars_list])
+                formatted_bgs = "\n".join([to_kebab_case(b) for b in bgs_list])
+                
+                self.txt_prescan_chars.setPlainText(formatted_chars)
+                self.txt_prescan_bgs.setPlainText(formatted_bgs)
+                
+                # Hiển thị Panel lên giao diện
+                self.prescan_panel.show()
                 
                 # Cập nhật số liệu lên Dashboard
                 self.card_chars.lbl_val.setText(str(chars_count))
@@ -660,7 +746,7 @@ class SceneBreakdownTab(QWidget):
                 self.card_bgs.lbl_val.setText(str(bgs_count))
                 self.card_bgs.lbl_val.setStyleSheet("font-size: 20px; font-weight: bold; color: #9B7FFF; font-family: monospace;")
                 
-                QMessageBox.information(self, "Pre-scan Hoàn Tất", f"Tìm thấy:\n- {chars_count} nhân vật\n- {bgs_count} bối cảnh")
+                # Bỏ cái hộp thoại bật lên (QMessageBox) đi để tránh làm phiền, chỉ hiển thị UI là đủ
                 
             elif task_type == "assign":
                 scenes_data = data.get("scenes", [])
@@ -700,3 +786,11 @@ class SceneBreakdownTab(QWidget):
 
     def _run_pipeline(self):
         QMessageBox.information(self, "Run Pipeline", "Chức năng xuất File JSON cho hệ thống G-Labs đang được phát triển.")
+
+    def _transfer_to_tool3(self):
+        chars = self.txt_prescan_chars.toPlainText().strip()
+        bgs = self.txt_prescan_bgs.toPlainText().strip()
+        if not chars and not bgs:
+            QMessageBox.warning(self, "Trống", "Không có dữ liệu Characters/Backgrounds (Pre-scan) để chuyển!")
+            return
+        self.transfer_to_tool3.emit(chars, bgs)

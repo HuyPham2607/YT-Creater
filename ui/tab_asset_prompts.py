@@ -1,9 +1,11 @@
 from PyQt6.QtWidgets import (QWidget, QVBoxLayout, QHBoxLayout, QLabel, 
                              QLineEdit, QPushButton, QTextEdit, QGridLayout, 
-                             QComboBox, QScrollArea, QFrame)
-from PyQt6.QtCore import Qt
+                             QComboBox, QScrollArea, QFrame, QMessageBox)
+from PyQt6.QtCore import Qt, pyqtSignal
 
 class AssetPromptsTab(QWidget):
+    request_load_tool2 = pyqtSignal()
+
     def __init__(self):
         super().__init__()
         main_lay = QVBoxLayout(self)
@@ -151,6 +153,15 @@ class AssetPromptsTab(QWidget):
         # ==========================================
         # 6. CHARACTERS & BACKGROUNDS LISTS
         # ==========================================
+        lists_header = QHBoxLayout()
+        lists_header.addWidget(QLabel("📋 DANH SÁCH TÀI NGUYÊN (ASSETS)", objectName="section_label"))
+        lists_header.addStretch()
+        self.btn_load_tool2 = QPushButton("📂 Load Data từ Tool 2")
+        self.btn_load_tool2.setObjectName("btn_sec")
+        self.btn_load_tool2.clicked.connect(lambda: self.request_load_tool2.emit())
+        lists_header.addWidget(self.btn_load_tool2)
+        lay.addLayout(lists_header)
+        
         lists_lay = QHBoxLayout()
         
         # Characters Box
@@ -230,13 +241,24 @@ class AssetPromptsTab(QWidget):
         # ==========================================
         act_lay = QHBoxLayout()
         
-        btn_gen_all = QPushButton("⚡ Generate All Prompts", objectName="btn_primary")
-        btn_gen_all.setFixedWidth(220)
-        act_lay.addWidget(btn_gen_all)
+        self.btn_gen_all = QPushButton("⚡ Generate All Prompts", objectName="btn_primary")
+        self.btn_gen_all.setFixedWidth(220)
+        self.btn_gen_all.clicked.connect(lambda: QMessageBox.information(self, "Tính năng", "Đang phát triển: Tự động ghép Style + Character/Background để tạo list Prompt!"))
+        act_lay.addWidget(self.btn_gen_all)
 
-        btn_style_ref = QPushButton("🧠 Style Reference", objectName="btn_sec")
-        btn_style_ref.setFixedWidth(160)
-        act_lay.addWidget(btn_style_ref)
+        self.btn_style_ref = QPushButton("🧠 Style Reference", objectName="btn_sec")
+        self.btn_style_ref.setFixedWidth(160)
+        self.btn_style_ref.clicked.connect(lambda: QMessageBox.information(self, "Tính năng", "Đang phát triển: Tạo ảnh Reference Style làm chuẩn cho Video!"))
+        act_lay.addWidget(self.btn_style_ref)
 
         act_lay.addStretch()
         main_lay.addLayout(act_lay)
+
+    def load_assets_data(self, chars, bgs):
+        if chars:
+            self.txt_characters.setPlainText(chars)
+            self.cmb_characters.clear()
+            self.cmb_characters.addItem("— Chọn từ danh sách Characters —")
+            self.cmb_characters.addItems([c for c in chars.split('\n') if c.strip()])
+        if bgs:
+            self.txt_backgrounds.setPlainText(bgs)
