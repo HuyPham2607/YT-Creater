@@ -598,6 +598,15 @@ class SceneBreakdownTab(QWidget):
             if stripped.startswith('>>>'): continue
             if stripped.startswith('[Estimated'): continue
                 
+            # Trích xuất text từ [TEXT OVERLAY: "nội dung"] (bỏ dấu nháy nếu có)
+            stripped = re.sub(r'\[TEXT OVERLAY:\s*"?([^\]]*?)"?\]', r'\1', stripped, flags=re.IGNORECASE)
+            
+            # Xoá các tag trong ngoặc vuông còn lại như [PAUSE], [CHẬM], [MUSIC DROP], v.v.
+            stripped = re.sub(r'\[.*?\]', '', stripped).strip()
+            
+            if not stripped:
+                continue
+                
             stripped = stripped.replace('*', '')
             cleaned_lines.append(stripped)
             
