@@ -14,14 +14,14 @@ load_dotenv()
 
 class SceneWorker(QThread):
     progress_signal = pyqtSignal(str)
-    result_signal = pyqtSignal(str, str) # task_type, json_result
+    result_signal = pyqtSignal(str, str)  # task_type, json_result
     error_signal = pyqtSignal(str)
     finished_signal = pyqtSignal()
 
     def __init__(self, task_type: str, config: dict):
         super().__init__()
-        self.task_type = task_type # 'prescan' hoặc 'assign'
-        self.config = config       # chứa scenes, style...
+        self.task_type = task_type  # 'prescan' | 'assign'
+        self.config = config
 
     def run(self):
         if genai is None:
@@ -36,7 +36,7 @@ class SceneWorker(QThread):
             return
 
         client = genai.Client(api_key=api_key)
-        model_name = "gemini-3.5-flash" # Dùng flash cho nhanh và đủ tốt
+        model_name = "gemini-3.5-flash"
 
         try:
             scenes = self.config.get("scenes", [])
@@ -47,9 +47,9 @@ class SceneWorker(QThread):
                 self._run_prescan(client, model_name, scenes)
             elif self.task_type == "assign":
                 self._run_assign(
-                    client, 
-                    model_name, 
-                    scenes, 
+                    client,
+                    model_name,
+                    scenes,
                     self.config.get("characters", ""),
                     self.config.get("backgrounds", "")
                 )
@@ -59,73 +59,60 @@ class SceneWorker(QThread):
         finally:
             self.finished_signal.emit()
 
+    # ──────────────────────────────────────────────────────────────────────
+    # PRESCAN — Quét nhân vật + bối cảnh + MÔ TẢ chi tiết từng asset
+    # ──────────────────────────────────────────────────────────────────────
     def _run_prescan(self, client, model_name, scenes):
-        self.progress_signal.emit("🔍 AI đang đọc kịch bản để trích xuất tài nguyên...")
-        
-        # Ghép các scene lại thành text để AI đọc
-        script_text = ""
-        for idx, text in enumerate(scenes):
-            script_text += f"Scene {idx + 1}: {text}\n"
+        self.progress_signal.emit("🔍 AI đang đọc toàn bộ kịch bản để trích xuất và mô tả tài nguyên...")
 
-        system_prompt = """You are an AI Script Analyzer for anime production. Your task is to read a list of chronological video scenes and extract a unique list of characters and background locations. You must normalize synonyms (e.g., 'the young boy' and 'Tanjiro' should be merged into 'Tanjiro'). Output ONLY a valid JSON object matching the requested schema. No markdown, no conversational filler.
-        
-        Expected JSON format:
-        {
-          "characters_count": number,
-          "backgrounds_count": number,
-          "characters_list": ["char 1", "char 2"],
-          "backgrounds_list": ["bg 1", "bg 2"]
-        }"""
-
-        user_prompt = f"Analyze the following scenes and output the JSON:\n\n{script_text}"
-
-        gen_config = types.GenerateContentConfig(
-            system_instruction=system_prompt,
-            temperature=0.1 # Nhiệt độ thấp để đảm bảo tính nhất quán
+        # Gửi toàn bộ scenes — cần đọc hết để hiểu từng nhân vật xuất hiện ở đâu
+        script_text = "\n".join(
+            f"Scene {i+1}: {text}" for i, text in enumerate(scenes)
         )
 
-        response = client.models.generate_content(
-            model=model_name,
-            contents=user_prompt,
-            config=gen_config
+        system_prompt = """You are an AI Script Analyzer and Visual Art Director for video production.
+
+Your task: read ALL scenes of a script, then for EACH unique character and background location:
+1. Extract a unique kebab-case identifier
+2. Write a concise but specific visual description (2-4 sentences) based ONLY on context clues in the script
+3. List up to 3 representative scene snippets where this asset appears
+
+IMPORTANT RULES:
+- Base descriptions STRICTLY on what the script implies (era, setting, role, clothing hints)
+- If the script says "xuyên không sang Ai Cập" → the character wears ancient Egyptian clothing
+- If the script says "bác sĩ tại bệnh viện" → white coat, hospital setting
+- Do NOT invent details not supported by the script
+- Normalize synonyms: "người chủ", "ông chủ", "boss" → pick one kebab name
+- For characters with no visual clues → description = "role only, appearance undefined in script"
+- kebab-case: lowercase, no accents, spaces → hyphens
+
+Output ONLY valid raw JSON, no markdown fences, no explanation.
+
+Schema:
+{
+  "characters_count": number,
+  "backgrounds_count": number,
+  "characters": {
+    "kebab-name": {
+      "display_name": "Tên hiển thị",
+      "description": "Visual description inferred from script context...",
+      "era_context": "modern / ancient-egypt / feudal-china / futuristic / etc.",
+      "sample_scenes": ["Scene text 1", "Scene text 2"]
+    }
+  },
+  "backgrounds": {
+    "kebab-name": {
+      "display_name": "Tên hiển thị",
+      "description": "Visual description of the location inferred from script...",
+      "era_context": "modern / ancient-egypt / feudal-china / futuristic / etc.",
+      "sample_scenes": ["Scene text 1", "Scene text 2"]
+    }
+  }
+}"""
+
+        user_prompt = (
+            f"Analyze ALL scenes below and output the enriched JSON:\n\n{script_text}"
         )
-        
-        json_str = self._extract_json(response.text)
-        self.result_signal.emit("prescan", json_str)
-
-    def _run_assign(self, client, model_name, scenes, characters, backgrounds):
-        self.progress_signal.emit("⚡ AI đang đóng vai Art Director để gán Nhân vật và Bối cảnh...")
-        
-        # Prepare input data
-        input_data = []
-        for idx, text in enumerate(scenes):
-            input_data.append({"id": idx + 1, "VO": text})
-            
-        system_prompt = f"""You are an elite Art Director for an AI anime production pipeline. Your task is to assign exactly ONE 'character' and ONE 'background' to each scene based on the VO text.
-
-        CRITICAL RULES:
-        1. CHARACTER: You must select the character's name EXACTLY from this list:
-        {characters}
-        If multiple characters are in the scene, pick the main one. If no character is visible, use "none".
-        
-        2. BACKGROUND: You must select the background's name EXACTLY from this list:
-        {backgrounds}
-        
-        3. CAMERA ANGLE: Assign a filmmaking camera tag (e.g., Close-up, Wide shot, Extreme Close-up, Establishing shot) based on the dramatic weight of the VO.
-        
-        Output format MUST be a single raw JSON matching the provided schema:
-        {{
-          "scenes": [
-            {{
-              "id": 1,
-              "character": "...",
-              "background": "...",
-              "camera": "..."
-            }}
-          ]
-        }}"""
-
-        user_prompt = f"Scenes to process:\n{json.dumps(input_data, ensure_ascii=False, indent=2)}\n\nGenerate the JSON output."
 
         gen_config = types.GenerateContentConfig(
             system_instruction=system_prompt,
@@ -137,13 +124,71 @@ class SceneWorker(QThread):
             contents=user_prompt,
             config=gen_config
         )
-        
+
+        json_str = self._extract_json(response.text)
+        self.result_signal.emit("prescan", json_str)
+
+    # ──────────────────────────────────────────────────────────────────────
+    # ASSIGN — Gán character + background + camera cho từng scene
+    # (Không thay đổi so với version cũ)
+    # ──────────────────────────────────────────────────────────────────────
+    def _run_assign(self, client, model_name, scenes, characters, backgrounds):
+        self.progress_signal.emit("⚡ AI đang đóng vai Art Director để gán Nhân vật và Bối cảnh...")
+
+        input_data = [{"id": i + 1, "VO": text} for i, text in enumerate(scenes)]
+
+        system_prompt = f"""You are an elite Art Director for an AI video production pipeline.
+Assign exactly ONE character and ONE background to each scene based on the VO text.
+
+CRITICAL RULES:
+1. CHARACTER — pick EXACTLY from this list (use kebab-case key):
+{characters}
+If no character is visible, use "none".
+
+2. BACKGROUND — pick EXACTLY from this list (use kebab-case key):
+{backgrounds}
+
+3. CAMERA ANGLE — assign a filmmaking tag based on dramatic weight:
+   Close-up | Wide shot | Extreme Close-up | Establishing shot | Over-the-shoulder | POV
+
+Output ONLY raw JSON:
+{{
+  "scenes": [
+    {{
+      "id": 1,
+      "character": "...",
+      "background": "...",
+      "camera": "..."
+    }}
+  ]
+}}"""
+
+        user_prompt = (
+            f"Scenes to process:\n"
+            f"{json.dumps(input_data, ensure_ascii=False, indent=2)}\n\n"
+            f"Generate the JSON output."
+        )
+
+        gen_config = types.GenerateContentConfig(
+            system_instruction=system_prompt,
+            temperature=0.1
+        )
+
+        response = client.models.generate_content(
+            model=model_name,
+            contents=user_prompt,
+            config=gen_config
+        )
+
         json_str = self._extract_json(response.text)
         self.result_signal.emit("assign", json_str)
 
+    # ──────────────────────────────────────────────────────────────────────
+    # HELPER
+    # ──────────────────────────────────────────────────────────────────────
     def _extract_json(self, text: str) -> str:
-        """Hàm regex để lấy đúng cục JSON từ response của Gemini (nếu có bọc markdown)"""
+        """Strip markdown fences nếu AI không tuân thủ, trả về JSON thuần."""
         match = re.search(r'\{.*\}', text, re.DOTALL)
         if match:
             return match.group(0)
-        return text # Trả về nguyên gốc nếu không tìm thấy pattern
+        return text

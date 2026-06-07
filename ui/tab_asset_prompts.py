@@ -9,7 +9,7 @@ class AssetPromptsTab(QWidget):
     def __init__(self):
         super().__init__()
         main_lay = QVBoxLayout(self)
-        main_lay.setContentsMargins(15, 2, 15, 2)
+        main_lay.setContentsMargins(15, 2, 15, 10) # Tăng margin bottom một chút để nút thở
         
         # ==========================================
         # 1. HEADER
@@ -40,6 +40,9 @@ class AssetPromptsTab(QWidget):
         # ==========================================
         scroll = QScrollArea()
         scroll.setWidgetResizable(True)
+        # Bỏ viền của ScrollArea để nhìn phẳng và mượt hơn
+        scroll.setStyleSheet("QScrollArea { border: none; background: transparent; }") 
+        
         widget = QWidget()
         lay = QVBoxLayout(widget)
         lay.setSpacing(4)
@@ -237,22 +240,89 @@ class AssetPromptsTab(QWidget):
         main_lay.addWidget(scroll)
 
         # ==========================================
-        # 8. BOTTOM ACTIONS
+        # 8. BOTTOM ACTIONS (ĐÃ THÊM STYLE GIỐNG ẢNH THỨ 2)
         # ==========================================
-        act_lay = QHBoxLayout()
+        # Tạo vùng container riêng cho Bottom Actions để ghim cứng ở đáy
+        act_container = QWidget()
+        act_container.setStyleSheet("background-color: transparent; margin-top: 5px;")
+        act_lay = QHBoxLayout(act_container)
+        act_lay.setContentsMargins(0, 5, 0, 0)
         
-        self.btn_gen_all = QPushButton("⚡ Generate All Prompts", objectName="btn_primary")
+        # Nút 1: Generate All Prompts (Màu cam giống ảnh)
+        self.btn_gen_all = QPushButton("⚡ Generate All Prompts")
         self.btn_gen_all.setFixedWidth(220)
+        self.btn_gen_all.setFixedHeight(38)
+        self.btn_gen_all.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.btn_gen_all.setStyleSheet("""
+            QPushButton {
+                background-color: #E8742A;
+                color: #12121A;
+                border: none;
+                border-radius: 6px;
+                font-weight: 800;
+                font-size: 13px;
+            }
+            QPushButton:hover {
+                background-color: #F08542;
+            }
+        """)
         self.btn_gen_all.clicked.connect(lambda: QMessageBox.information(self, "Tính năng", "Đang phát triển: Tự động ghép Style + Character/Background để tạo list Prompt!"))
         act_lay.addWidget(self.btn_gen_all)
 
-        self.btn_style_ref = QPushButton("🧠 Style Reference", objectName="btn_sec")
+        # Nút 2: Style Reference (Nút phụ nền tối có viền sáng mờ)
+        self.btn_style_ref = QPushButton("🧠 Style Reference")
         self.btn_style_ref.setFixedWidth(160)
-        self.btn_style_ref.clicked.connect(lambda: QMessageBox.information(self, "Tính năng", "Đang phát triển: Tạo ảnh Reference Style làm chuẩn cho Video!"))
+        self.btn_style_ref.setFixedHeight(38)
+        self.btn_style_ref.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.btn_style_ref.setStyleSheet("""
+            QPushButton {
+                background-color: transparent;
+                color: #E8E8F0;
+                border: 1px solid rgba(255, 255, 255, 0.15);
+                border-radius: 6px;
+                font-weight: 600;
+                font-size: 13px;
+            }
+            QPushButton:hover {
+                background-color: rgba(255, 255, 255, 0.05);
+            }
+        """)
+        self.btn_style_ref.clicked.connect(self._toggle_style_ref)
         act_lay.addWidget(self.btn_style_ref)
 
-        act_lay.addStretch()
-        main_lay.addLayout(act_lay)
+        act_lay.addStretch() # Đẩy 2 nút sang lề trái
+        
+        # Thêm toàn bộ container vào layout chính (nằm ngoài thanh scroll nên sẽ luôn hiện ở đáy)
+        main_lay.addWidget(act_container)
+
+        # Khung hiển thị Style Ref Prompt (Ẩn mặc định)
+        self.txt_style_ref_display = QTextEdit()
+        self.txt_style_ref_display.setReadOnly(True)
+        self.txt_style_ref_display.setFixedHeight(60)
+        self.txt_style_ref_display.setStyleSheet("background: #171724; border: 1px solid rgba(232,116,42,0.5); border-radius: 6px; color: #E8742A; padding: 10px; font-family: 'Space Mono', monospace; font-size: 13px;")
+        self.txt_style_ref_display.hide()
+        main_lay.addWidget(self.txt_style_ref_display)
+
+    def apply_profile(self, profile_data):
+        self.style_ref_text = profile_data.get("style_ref", "")
+        if profile_data.get("char_style"):
+            self.txt_char_style.setText(profile_data["char_style"])
+        if profile_data.get("bg_style"):
+            self.txt_bg_style.setText(profile_data["bg_style"])
+        if profile_data.get("scene_style"):
+            self.txt_scene_style.setText(profile_data["scene_style"])
+        if profile_data.get("visual"):
+            self.txt_visual.setText(profile_data["visual"])
+
+    def _toggle_style_ref(self):
+        if self.txt_style_ref_display.isVisible():
+            self.txt_style_ref_display.hide()
+        else:
+            text = getattr(self, 'style_ref_text', '').strip()
+            if not text:
+                text = "Chưa có Style Reference Prompt trong Profile đang chọn."
+            self.txt_style_ref_display.setText(text)
+            self.txt_style_ref_display.show()
 
     def load_assets_data(self, chars, bgs):
         if chars:
