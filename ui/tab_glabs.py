@@ -297,7 +297,13 @@ class GLabsAutomationTab(QWidget):
         h_bottom.addWidget(btn_stop, 1)
         left_lay.addLayout(h_bottom)
         
-        main_lay.addWidget(left_panel)
+        left_scroll = QScrollArea()
+        left_scroll.setWidgetResizable(True)
+        left_scroll.setFrameShape(QFrame.Shape.NoFrame)
+        left_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        left_scroll.setFixedWidth(292)
+        left_scroll.setWidget(left_panel)
+        main_lay.addWidget(left_scroll)
 
         # RIGHT PANEL
         right_panel = QVBoxLayout()

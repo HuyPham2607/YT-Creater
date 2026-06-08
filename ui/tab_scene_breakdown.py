@@ -797,7 +797,7 @@ class SceneBreakdownTab(QWidget):
         self.table_scenes = QTableWidget()
         self.table_scenes.setColumnCount(8)
         self.table_scenes.setHorizontalHeaderLabels(["STT","LEVEL","VO","CHARACTER","BACKGROUND","CAMERA","DUR","ACTIONS"])
-        self.table_scenes.setMinimumHeight(420)
+        self.table_scenes.setMinimumHeight(300)
         self.table_scenes.setStyleSheet("""
             QTableWidget { background-color: #0F0F18; border: 1px solid #252535; border-radius: 6px; gridline-color: #1F1F2E; color: #E8E8F0; font-size: 13px; }
             QHeaderView::section { background-color: #171724; color: #606075; font-weight: bold; font-size: 11px; padding: 8px; border: none; border-bottom: 1px solid #252535; }
@@ -836,7 +836,7 @@ class SceneBreakdownTab(QWidget):
         self.tab_camera   = CameraGuideWidget();     self.stack.addWidget(self.tab_camera)    # 4
         self.tab_notes    = ProductionNotesWidget(); self.stack.addWidget(self.tab_notes)     # 5
 
-        self.stack.setMinimumHeight(500)
+        self.stack.setMinimumHeight(360)
         lay.addWidget(self.stack)
 
         # ── SCENE RENAMER (giữ nguyên) ───────────────────────────────

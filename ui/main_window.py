@@ -1,4 +1,4 @@
-from PyQt6.QtWidgets import (QMainWindow, QWidget, QHBoxLayout, QVBoxLayout, 
+from PyQt6.QtWidgets import (QApplication, QMainWindow, QWidget, QHBoxLayout, QVBoxLayout,
                              QPushButton, QLabel, QStackedWidget, QFrame, QButtonGroup, QMessageBox)
 from PyQt6.QtCore import Qt, pyqtSignal
 
@@ -27,7 +27,7 @@ class MainWindow(QMainWindow):
     def __init__(self):
         super().__init__()
         self.setWindowTitle("RX MEDIA - Production Suite")
-        self.resize(1920, 1080) # Nén chiều cao cực hạn để tránh tràn màn hình laptop khi scale 125%
+        self._apply_adaptive_window_size()
 
         main_widget = QWidget()
         main_widget.setObjectName("main_content")
@@ -155,6 +155,25 @@ class MainWindow(QMainWindow):
 
         # Tự động nạp profile khi khởi động nếu đã có file
         self.load_active_profile()
+
+    def _apply_adaptive_window_size(self):
+        screen = QApplication.primaryScreen()
+        if not screen:
+            self.resize(1366, 768)
+            return
+
+        available = screen.availableGeometry()
+        width = min(max(int(available.width() * 0.88), 1100), 1600)
+        height = min(max(int(available.height() * 0.86), 680), 920)
+        width = min(width, available.width() - 40)
+        height = min(height, available.height() - 40)
+
+        self.resize(width, height)
+        self.setMinimumSize(min(1024, width), min(640, height))
+
+        x = available.x() + (available.width() - width) // 2
+        y = available.y() + (available.height() - height) // 2
+        self.move(x, y)
 
     def load_active_profile(self):
         import os, json

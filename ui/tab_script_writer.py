@@ -21,6 +21,7 @@ class ScriptWriterTab(QWidget):
         self._research_notes = ""   # filled after research completes
         self._last_config    = {}   # saved config so Write uses same params
         self.current_topic_title = ""
+        self.current_topic_strategy = {}
 
         # ── Root layout ───────────────────────────────────────────
         main_lay = QVBoxLayout(self)
@@ -114,6 +115,7 @@ class ScriptWriterTab(QWidget):
             "Parts — Flexible",
             "Custom — Tự nhập structure",
         ])
+        self.cmb_struct.currentTextChanged.connect(self._update_structure_hint)
         grid.addWidget(self.cmb_struct, 1, 1)
 
         self.cmb_pov = QComboBox()
@@ -149,18 +151,24 @@ class ScriptWriterTab(QWidget):
         grid.setColumnStretch(4, 2)
         lay.addLayout(grid)
 
+        self.lbl_structure_hint = QLabel("")
+        self.lbl_structure_hint.setWordWrap(True)
+        self.lbl_structure_hint.setStyleSheet("color: #8A8AA0; font-size: 12px; font-style: italic;")
+        lay.addWidget(self.lbl_structure_hint)
+        self._update_structure_hint(self.cmb_struct.currentText())
+
         # --- AI MODEL & CONTEXT BỔ SUNG ---
         lay.addWidget(QLabel("AI MODEL & CONTEXT BỔ SUNG (OPTIONAL)", objectName="section_label"))
 
         self.cmb_ai = QComboBox()
-        self.cmb_ai.addItems(["Gemini 1.5 Flash", "Claude 3.5 Sonnet"])
+        self.cmb_ai.addItems(["Gemini 3.5 Flash"])
         self.cmb_ai.setFixedWidth(220)
         lay.addWidget(self.cmb_ai)
 
         self.txt_extra = QTextEdit()
         self.txt_extra.setPlaceholderText(
             "Nhân vật, bối cảnh, twist muốn có, tone cụ thể...\n"
-            "Tip: Nếu chọn Auto structure, Claude sẽ tự quyết số nhân và tên từng phần nhờ vào topic."
+            "Tip: Nếu chọn Auto structure, Gemini sẽ tự quyết cấu trúc và số phần phù hợp."
         )
         self.txt_extra.setMaximumHeight(60)
         lay.addWidget(self.txt_extra)
@@ -243,7 +251,7 @@ class ScriptWriterTab(QWidget):
             "Bấm 🔍 RESEARCH TRƯỚC để AI thu thập facts & số liệu.\n"
             "Kiểm tra xong, bấm ✍️ VIẾT KỊCH BẢN — research notes sẽ được đính kèm tự động."
         )
-        self.txt_research.setMinimumHeight(160)
+        self.txt_research.setMinimumHeight(120)
         self.txt_research.setStyleSheet(
             "font-size: 13px; line-height: 1.5; background-color: #1a1a24; color: #a1a1aa;"
         )
@@ -262,14 +270,14 @@ class ScriptWriterTab(QWidget):
             "Kịch bản hoàn chỉnh sẽ hiển thị ở đây.\n"
             "Bạn có thể chỉnh sửa trực tiếp sau khi generate."
         )
-        self.txt_output.setMinimumHeight(500)
+        self.txt_output.setMinimumHeight(320)
         self.txt_output.setStyleSheet("font-size: 15px; line-height: 1.6;")
         lay_scr.addWidget(self.txt_output)
 
         self.output_splitter.addWidget(box_research)
         self.output_splitter.addWidget(box_script)
-        self.output_splitter.setMinimumHeight(800)
-        self.output_splitter.setSizes([220, 580])
+        self.output_splitter.setMinimumHeight(520)
+        self.output_splitter.setSizes([170, 430])
 
         lay.addWidget(self.output_splitter)
         lay.setStretchFactor(self.output_splitter, 1)
@@ -322,6 +330,19 @@ class ScriptWriterTab(QWidget):
     def _update_word_count(self, mins: int):
         self.lbl_words.setText(f"(~{mins * 155} từ)")
 
+    def _update_structure_hint(self, structure: str):
+        hints = {
+            "Auto": "Auto: dùng khi chưa chắc cấu trúc nào hợp. Gemini sẽ chọn giữa Levels/Acts/Timeline/Chapters/Parts dựa trên topic, target phút và DNA kênh.",
+            "Levels — Escalation (POV)": "Levels: hợp với video đào sâu từng tầng nhận thức, sự thật ẩn, mindset, tâm lý, tài chính cá nhân, các chủ đề cần tăng độ nặng theo từng phần.",
+            "Acts — Story Arc (Narrative)": "Acts: hợp với câu chuyện có hành trình, xung đột, biến cố, case study, tiểu sử, hoặc topic cần cảm xúc kiểu mở đầu → khủng hoảng → chuyển hóa.",
+            "Timeline — Chronological": "Timeline: hợp với lịch sử, tiến trình, sự kiện theo năm/tháng, quá trình hình thành vấn đề, hoặc 'mọi chuyện đã đi đến đây như thế nào'.",
+            "Chapters — Topic-based": "Chapters: hợp với nội dung phân tích nhiều góc ngang hàng, listicle, breakdown từng khía cạnh, mỗi chương là một ý độc lập.",
+            "Parts — Flexible": "Parts: hợp khi topic không cần tăng cấp rõ, không phải câu chuyện, không theo thời gian; cần chia phần linh hoạt để giải thích mạch lạc.",
+            "Custom — Tự nhập structure": "Custom: dùng khi bạn đã có cấu trúc riêng trong Extra Context. Nếu không nhập cấu trúc rõ, nên chọn Auto."
+        }
+        if hasattr(self, "lbl_structure_hint"):
+            self.lbl_structure_hint.setText(hints.get(structure, hints["Auto"]))
+
     def _build_config(self) -> dict | None:
         """Validate inputs and return config dict. Returns None if invalid."""
         topic = self.txt_topic.text().strip()
@@ -332,6 +353,9 @@ class ScriptWriterTab(QWidget):
         target_mins = self.spin_mins.value()
         parts_raw   = self.cmb_parts.currentText()
         parts       = parts_raw if parts_raw == "Auto" else int(parts_raw)
+        topic_strategy = self.current_topic_strategy
+        if topic_strategy and topic_strategy.get("selected_title_text") != topic:
+            topic_strategy = {}
 
         return {
             "topic"         : topic,
@@ -344,6 +368,7 @@ class ScriptWriterTab(QWidget):
             "target_mins"   : target_mins,
             "target_words"  : target_mins * 155,
             "extra_context" : self.txt_extra.toPlainText().strip(),
+            "topic_strategy": topic_strategy,
             # research_notes injected separately
         }
 
@@ -473,9 +498,13 @@ class ScriptWriterTab(QWidget):
                 if st_text:
                     display_text = f"[{topic_name[:30]}...] {st_text}"
                     selection_items.append(display_text)
+                    topic_strategy = t.copy()
+                    topic_strategy["selected_title"] = st
+                    topic_strategy["selected_title_text"] = st_text
                     self.topic_map[display_text] = {
                         "topic_title": topic_name,
-                        "selected_subtitle": st_text
+                        "selected_subtitle": st_text,
+                        "topic_strategy": topic_strategy
                     }
             
         if not selection_items:
@@ -523,6 +552,7 @@ class ScriptWriterTab(QWidget):
                 if mapped_data:
                     self.txt_topic.setText(mapped_data["selected_subtitle"])
                     self.current_topic_title = mapped_data["topic_title"]
+                    self.current_topic_strategy = mapped_data.get("topic_strategy", {})
 
     def _save_script_to_profile(self):
         script_title = self.txt_topic.text().strip()

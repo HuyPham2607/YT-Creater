@@ -33,15 +33,17 @@ def _build_metadata_block(topic, target_mins, target_words, parts, structure_lab
 
 def _word_count_rules(target_words):
     """Shared word-count enforcement instructions."""
-    margin = int(target_words * 0.05)
+    margin = max(int(target_words * 0.03), 25)
     low    = target_words - margin
     high   = target_words + margin
     return f"""
 ⚠️  WORD COUNT — MANDATORY ENFORCEMENT
-- Your full script (Hook + all sections + Outro) MUST land between {low} and {high} words.
-- After drafting, mentally estimate your count.
-- If under → expand each section with concrete examples, short anecdotes, or specific data.
-- If over  → cut filler phrases and reduce repetition.
+- Count ONLY spoken dialogue and CTA text.
+- Do NOT count metadata, section headers, dividers, timestamps, bracketed performance cues, or the final estimated-word-count line.
+- Spoken dialogue + CTA MUST land between {low} and {high} words.
+- After drafting, estimate the spoken-dialogue word count only.
+- If under → expand with concrete lived examples, emotional specificity, or practical reflection.
+- If over  → cut filler phrases, repeated ideas, and decorative lines.
 - ALWAYS end the script with this line (replace XXX with your actual estimate):
   [Estimated word count: XXX / Target: {target_words}]
 """
@@ -50,14 +52,16 @@ def _word_count_rules(target_words):
 def _shared_output_rules():
     return """
 GLOBAL OUTPUT RULES (apply to ALL structures):
-1. Write PURE DIALOGUE only. No production tags like [Camera…], [B-roll…], [Sound…].
+1. Write mostly spoken dialogue. Short performance cues are allowed ONLY when useful for pacing.
 2. Every sentence on its own line — one line break between sentences, one blank line between paragraphs.
 3. Section headers must use this exact syntax:  === SECTION NAME ===
 4. Level / Chapter / Act dividers use:  --- LABEL ---
 5. Key declarations or harsh truths: wrap in *asterisks*  e.g. *This is the first illusion.*
 6. Optional call-to-action beats: >>> ACTION LAYER: [content]
 7. The very last section is always  === OUTRO ===
-8. NO intro greetings. NO closing remarks from you. Output the script ONLY.
+8. Allowed bracketed cues: [PAUSE], [CHẬM], [TEXT OVERLAY: ...], [MUSIC DROP]. Use sparingly.
+9. Do NOT add camera directions, B-roll lists, editing notes, or scene production notes.
+10. NO intro greetings. NO closing remarks from you. Output the script ONLY.
 """
 
 
@@ -84,6 +88,157 @@ RULES for using this data:
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 END OF RESEARCH NOTES — Now write the script below.
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+"""
+
+
+def _factuality_rules(research_notes: str) -> str:
+    if research_notes and research_notes.strip():
+        return """
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+FACTUALITY MODE — RESEARCH-BACKED
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+- You may use specific statistics, studies, years, named institutions, or case examples ONLY when they are present in the research notes.
+- If research notes are uncertain or marked ⚠️, hedge the claim naturally or omit it.
+- Do not invent additional facts outside the research notes.
+"""
+
+    return """
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+FACTUALITY MODE — SCRIPT-ONLY / NO RESEARCH
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+- Do NOT invent statistics, percentages, study results, named institutions, laws, reports, dates, or named case studies.
+- Avoid phrases like "research shows", "studies prove", "data says", or exact percentages unless provided by research notes.
+- You may use general human observations, emotional truths, everyday examples, and culturally familiar situations.
+- If you need credibility, phrase it as lived experience or common pattern, not as verified data.
+"""
+
+
+def _list_to_lines(items, prefix="- "):
+    if not isinstance(items, list):
+        return str(items or "").strip()
+    return "\n".join(f"{prefix}{str(item).strip()}" for item in items if str(item).strip())
+
+
+def _title_options_to_lines(titles):
+    if not isinstance(titles, list):
+        return ""
+    lines = []
+    for item in titles:
+        if not isinstance(item, dict):
+            continue
+        text = item.get("text", "")
+        formula = item.get("formula", "")
+        score = item.get("score", "")
+        parts = [text]
+        meta = " / ".join(str(v) for v in [formula, f"score {score}" if score != "" else ""] if v)
+        if meta:
+            parts.append(f"({meta})")
+        line = " ".join(str(part).strip() for part in parts if str(part).strip())
+        if line:
+            lines.append(f"- {line}")
+    return "\n".join(lines)
+
+
+def _topic_strategy_injection(strategy: dict) -> str:
+    if not isinstance(strategy, dict) or not strategy:
+        return ""
+
+    selected_title = strategy.get("selected_title_text") or ""
+    original_topic = strategy.get("title") or strategy.get("topic_name") or ""
+    titles = _title_options_to_lines(strategy.get("titles", []))
+    retention_hooks = _list_to_lines(strategy.get("retention_hooks", []))
+    script_path = _list_to_lines(strategy.get("script_path", []))
+    evidence_needed = _list_to_lines(strategy.get("evidence_needed", []))
+    research_keywords = _list_to_lines(strategy.get("research_keywords", []))
+
+    return f"""
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+SCRIPT STRATEGY BRIEF FROM TOPIC IDEATOR — USE, BUT DO NOT PRINT AS A SEPARATE SECTION
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+This brief is the creative strategy behind the selected topic. Use it to shape the script's angle, emotional arc, examples, transitions, and retention design.
+
+FORMAT PRESERVATION RULE:
+- Keep the required script output format from the structure prompt exactly.
+- Keep metadata, section headers, notes, outro, and word-count line exactly as requested.
+- Do NOT add a JSON block.
+- Do NOT print this strategy brief as its own section.
+
+SELECTED TITLE:
+{selected_title}
+
+ORIGINAL TOPIC:
+{original_topic}
+
+TARGET AUDIENCE:
+{strategy.get("target_audience", "")}
+
+VIEWER PROMISE:
+{strategy.get("one_line_promise", "")}
+
+CORE VIEWER QUESTION:
+{strategy.get("viewer_question", "")}
+
+EMOTIONAL DRIVER:
+{strategy.get("emotional_driver", "")}
+
+UNIQUE ANGLE:
+{strategy.get("unique_angle", "")}
+
+COMPETITOR COMMON ANGLE:
+{strategy.get("competitor_common_angle", "")}
+
+OUR BETTER ANGLE:
+{strategy.get("our_better_angle", "")}
+
+TREND / LOCAL RELEVANCE:
+{strategy.get("trend_connection", "")}
+{strategy.get("local_vietnam_angle", "")}
+
+TITLE OPTIONS:
+{titles}
+
+RETENTION OPEN LOOPS TO WEAVE INTO THE SCRIPT:
+{retention_hooks}
+
+RECOMMENDED SCRIPT PATH:
+{script_path}
+
+EVIDENCE NEEDED:
+{evidence_needed}
+
+RESEARCH KEYWORDS:
+{research_keywords}
+
+VISUAL POTENTIAL:
+{strategy.get("visual_potential", "")}
+
+RISK / WATCHOUT:
+{strategy.get("risk_or_watchout", "")}
+
+SCORING CONTEXT:
+- CTR: {strategy.get("ctr_level", "")} / {strategy.get("ctr_score", "")}
+- Evergreen: {strategy.get("evergreen_score", "")}
+- Originality: {strategy.get("originality_score", "")}
+- Production: {strategy.get("production_score", "")}
+- Overall: {strategy.get("overall_score", "")}
+
+WRITING INTERPRETATION:
+- Start from the viewer's lived tension, not from an abstract lecture.
+- Build the script around the better angle, not the generic competitor angle.
+- Use the retention hooks as open loops across the script, then resolve them progressively.
+- Use the recommended script path as the backbone unless the selected structure requires a cleaner order.
+- Treat risk/watchout as a guardrail: avoid exaggeration, victim-blaming, fake certainty, or unsupported claims.
+"""
+
+
+def _creator_extra_context_injection(extra_context: str) -> str:
+    if not extra_context or not extra_context.strip():
+        return ""
+    return f"""
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+CREATOR EXTRA INSTRUCTIONS — APPLY WITHOUT BREAKING FORMAT
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+{extra_context.strip()}
 """
 
 
@@ -945,18 +1100,67 @@ STRUCTURE_MAP = {
 }
 
 
+def _default_parts_for_structure(structure_key: str, target_mins: int) -> int | str:
+    if structure_key in ("Auto", "Auto — Claude tự quyết (recommended)"):
+        return "Auto"
+
+    if structure_key in ("Acts", "Acts — Story Arc (Narrative)"):
+        return 5 if target_mins >= 12 else 4
+    if structure_key in ("Levels", "Levels — Escalation (POV)", "LV"):
+        return 4 if target_mins >= 12 else 3
+    if structure_key in ("Timeline", "Timeline — Chronological"):
+        return 5 if target_mins >= 12 else 4
+    if structure_key in ("Chapters", "Chapters — Topic-based"):
+        return 5 if target_mins >= 12 else 4
+    if structure_key in ("Parts", "Parts — Flexible"):
+        return 5 if target_mins >= 12 else 4
+    if structure_key in ("Custom", "Custom — Tự nhập structure"):
+        return 4
+
+    return 4
+
+
+def normalize_script_config(config: dict) -> dict:
+    normalised = dict(config)
+    structure_key = normalised.get("structure", "Auto")
+    target_mins = int(normalised.get("target_mins", 10) or 10)
+    parts = normalised.get("parts", "Auto")
+
+    if parts == "Auto":
+        normalised["parts"] = _default_parts_for_structure(structure_key, target_mins)
+        return normalised
+
+    try:
+        normalised["parts"] = max(1, int(parts))
+    except (TypeError, ValueError):
+        normalised["parts"] = _default_parts_for_structure(structure_key, target_mins)
+
+    return normalised
+
+
 def build_prompts(config: dict) -> tuple[str, str]:
     """
     Returns (system_prompt, user_prompt) for the given config.
     Falls back to AUTO if structure is not recognised.
     Research notes in config["research_notes"] are automatically injected.
     """
+    config = normalize_script_config(config)
     structure_key = config.get("structure", "Auto")
     builder = STRUCTURE_MAP.get(structure_key, prompt_auto)
     system_prompt, user_prompt = builder(config)
+    research_notes = config.get("research_notes", "")
+
+    user_prompt += _factuality_rules(research_notes)
+
+    topic_strategy = config.get("topic_strategy", {})
+    if topic_strategy:
+        user_prompt += _topic_strategy_injection(topic_strategy)
+
+    extra_context = config.get("extra_context", "")
+    if extra_context:
+        user_prompt += _creator_extra_context_injection(extra_context)
 
     # Inject pre-gathered research notes if available
-    research_notes = config.get("research_notes", "")
     if research_notes:
         user_prompt += _research_injection(research_notes)
 

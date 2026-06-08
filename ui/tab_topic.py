@@ -43,8 +43,9 @@ class ClickableTitleFrame(QFrame):
 # COMPONENT: THẺ KẾT QUẢ TOPIC (CARD UI)
 # =======================================================
 class TopicCard(QFrame):
-    def __init__(self, index, topic_name, titles, angle, hook, tags, ctr_level, diff_level):
+    def __init__(self, index, topic_name, titles, angle, hook, tags, ctr_level, diff_level, details=None):
         super().__init__()
+        details = details or {}
         self.setObjectName("topic_card")
         self.setStyleSheet("""
             QFrame#topic_card { background: #131320; border: 1px solid #2A2A48; border-radius: 8px; }
@@ -84,8 +85,11 @@ class TopicCard(QFrame):
         lbl_ctr.setStyleSheet("background: rgba(0, 230, 118, 0.1); color: #00E676; border: 1px solid rgba(0, 230, 118, 0.3); padding: 4px 8px; border-radius: 4px; font-weight: bold; font-size: 10px;")
         lbl_diff = QLabel(diff_level)
         lbl_diff.setStyleSheet("background: rgba(77, 166, 255, 0.1); color: #4DA6FF; border: 1px solid rgba(77, 166, 255, 0.3); padding: 4px 8px; border-radius: 4px; font-weight: bold; font-size: 10px;")
+        lbl_overall = QLabel(f"SCORE: {details.get('overall_score', '-')}")
+        lbl_overall.setStyleSheet("background: rgba(232,116,42,0.12); color: #E8742A; border: 1px solid rgba(232,116,42,0.3); padding: 4px 8px; border-radius: 4px; font-weight: bold; font-size: 10px;")
         h_lay.addWidget(lbl_ctr)
         h_lay.addWidget(lbl_diff)
+        h_lay.addWidget(lbl_overall)
         main_lay.addWidget(header_frm)
 
         # 2. BODY CHIA 2 CỘT
@@ -123,6 +127,31 @@ class TopicCard(QFrame):
         body_lay.addLayout(right_vbox, 1) # Stretch = 1
 
         main_lay.addLayout(body_lay)
+
+        strategic_lay = QGridLayout()
+        strategic_lay.setContentsMargins(16, 0, 16, 12)
+        strategic_lay.setSpacing(12)
+        strategic_items = [
+            ("AUDIENCE", details.get("target_audience", "")),
+            ("PROMISE", details.get("one_line_promise", "")),
+            ("TREND / LOCAL", " | ".join(filter(None, [details.get("trend_connection", ""), details.get("local_vietnam_angle", "")]))),
+            ("BETTER ANGLE", " ? ".join(filter(None, [details.get("competitor_common_angle", ""), details.get("our_better_angle", "")]))),
+            ("RETENTION", " ? ".join(details.get("retention_hooks", []) if isinstance(details.get("retention_hooks"), list) else [])),
+            ("RESEARCH", ", ".join(details.get("research_keywords", []) if isinstance(details.get("research_keywords"), list) else [])),
+            ("VISUAL", details.get("visual_potential", "")),
+            ("RISK", details.get("risk_or_watchout", "")),
+        ]
+        for idx, (label, value) in enumerate(strategic_items):
+            if not value:
+                continue
+            row, col = divmod(idx, 2)
+            box = QLabel(f"<b>{label}</b><br>{value}")
+            box.setObjectName("desc_lbl")
+            box.setWordWrap(True)
+            box.setAlignment(Qt.AlignmentFlag.AlignTop | Qt.AlignmentFlag.AlignLeft)
+            box.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
+            strategic_lay.addWidget(box, row, col)
+        main_lay.addLayout(strategic_lay)
 
         # 3. FOOTER
         foot_frm = QFrame()
@@ -193,6 +222,8 @@ class TopicIdeatorTab(QWidget):
         self.style_content = ""
         self.dna_content = ""
         self.done_content = ""
+        self.current_topics = []
+        self.current_model_used = "AI"
 
         # --- 1. CONTEXT FILES ---
         lay.addWidget(QLabel("CONTEXT FILES (OPTIONAL)", objectName="section_label"))
@@ -241,10 +272,16 @@ class TopicIdeatorTab(QWidget):
         self.cmb_ref.lineEdit().setPlaceholderText("VD: https://youtube.com/@channel")
         grid.addWidget(self.cmb_ref, 1, 2)
 
-        self.cmb_focus = QComboBox(); self.cmb_focus.addItems(["CTR cao nhất", "Evergreen", "Góc độ độc đáo"]); grid.addWidget(self.cmb_focus, 1, 3)
+        self.cmb_focus = QComboBox(); self.cmb_focus.addItems(["CTR cao nhất", "Evergreen nhất", "Góc độ độc đáo", "Dễ làm nhất", "Cân bằng"]); grid.addWidget(self.cmb_focus, 1, 3)
 
         grid.setColumnStretch(0, 1); grid.setColumnStretch(1, 1); grid.setColumnStretch(2, 2); grid.setColumnStretch(3, 1)
         lay.addLayout(grid)
+        lay.addWidget(QLabel("YÊU CẦU BỔ SUNG (OPTIONAL)", objectName="muted"))
+        self.txt_extra_request = QTextEdit()
+        self.txt_extra_request.setFixedHeight(72)
+        self.txt_extra_request.setPlaceholderText("VD: Ưu tiên topics có yếu tố tranh luận, tránh drama rẻ tiền, phù hợp video 12 phút...")
+        lay.addWidget(self.txt_extra_request)
+
 
         # --- 4. BOTTOM ACTIONS (Đẩy lên trên kết quả như trong ảnh) ---
         line = QFrame(); line.setFrameShape(QFrame.Shape.HLine); line.setStyleSheet("background: #282840; border: none; margin: 10px 0;")
@@ -261,8 +298,15 @@ class TopicIdeatorTab(QWidget):
 
         act_lay.addStretch()
 
-        act_lay.addWidget(QPushButton("Sort: CTR", objectName="btn_sec"))
-        act_lay.addWidget(QPushButton("Sort: Easy", objectName="btn_sec"))
+        self.btn_sort_overall = QPushButton("Sort: Overall", objectName="btn_sec")
+        self.btn_sort_production = QPushButton("Sort: Production", objectName="btn_sec")
+        self.btn_sort_evergreen = QPushButton("Sort: Evergreen", objectName="btn_sec")
+        self.btn_sort_overall.clicked.connect(lambda: self._sort_topics("overall_score", "Overall"))
+        self.btn_sort_production.clicked.connect(lambda: self._sort_topics("production_score", "Production"))
+        self.btn_sort_evergreen.clicked.connect(lambda: self._sort_topics("evergreen_score", "Evergreen"))
+        act_lay.addWidget(self.btn_sort_overall)
+        act_lay.addWidget(self.btn_sort_production)
+        act_lay.addWidget(self.btn_sort_evergreen)
         
         self.lbl_result_count = QLabel("✓ 0 topics generated")
         self.lbl_result_count.setStyleSheet("color: #00E676; font-weight: bold; margin-left: 10px;")
@@ -288,6 +332,7 @@ class TopicIdeatorTab(QWidget):
     def apply_profile(self, profile_data):
         self.style_content = profile_data.get("style_content", "")
         self.dna_content = profile_data.get("dna_content", "")
+        self.done_content = profile_data.get("done_content") or profile_data.get("topic_content", "")
         
         if self.style_content:
             self.dz_style.lbl_desc.setText("Đã nạp từ Profile")
@@ -302,6 +347,13 @@ class TopicIdeatorTab(QWidget):
         else:
             self.dz_dna.lbl_desc.setText("Upload để suggest đúng format")
             self.dz_dna.lbl_desc.setStyleSheet("color: #606075; font-size: 11px;")
+
+        if self.done_content:
+            self.dz_done.lbl_desc.setText("Đã nạp từ Profile")
+            self.dz_done.lbl_desc.setStyleSheet("color: #3AD68A;")
+        else:
+            self.dz_done.lbl_desc.setText("Upload để tránh trùng lặp")
+            self.dz_done.lbl_desc.setStyleSheet("color: #606075; font-size: 11px;")
             
         self.txt_custom_niche.setText(profile_data.get("niche", ""))
         
@@ -320,8 +372,9 @@ class TopicIdeatorTab(QWidget):
         self.btn_gen.setText("⏳ Đang xử lý AI...")
         
         # Xoá các kết quả cũ nếu có
-        for i in reversed(range(self.results_layout.count())): 
-            self.results_layout.itemAt(i).widget().setParent(None)
+        self.current_topics = []
+        self.current_model_used = "AI"
+        self._clear_results()
 
         # Quét các nút Tag Ngách Kênh đang được check
         niches = []
@@ -341,7 +394,7 @@ class TopicIdeatorTab(QWidget):
             "lang": self.cmb_lang.currentText(),
             "ref_channel": self.cmb_ref.currentText(),
             "focus": self.cmb_focus.currentText(),
-            "extra": "", # Bạn có thể thêm ô nhập Yêu cầu bổ sung trên UI sau
+            "extra": self.txt_extra_request.toPlainText().strip(),
             "style_content": getattr(self, 'style_content', ""),
             "dna_content": getattr(self, 'dna_content', ""),
             "done_content": getattr(self, 'done_content', "")
@@ -351,6 +404,60 @@ class TopicIdeatorTab(QWidget):
         self.worker.result_signal.connect(self._on_worker_result)
         self.worker.finished_signal.connect(self._on_worker_finished)
         self.worker.start()
+
+    def _clear_results(self):
+        for i in reversed(range(self.results_layout.count())):
+            item = self.results_layout.itemAt(i)
+            widget = item.widget()
+            if widget:
+                widget.setParent(None)
+
+    def _score_value(self, topic, key):
+        value = topic.get(key, 0)
+        try:
+            return int(value)
+        except (TypeError, ValueError):
+            return 0
+
+    def _sort_topics(self, score_key, label):
+        if not self.current_topics:
+            QMessageBox.information(self, "Chưa có topic", "Hãy Generate Topics trước khi sort.")
+            return
+
+        self.current_topics = sorted(
+            self.current_topics,
+            key=lambda topic: self._score_value(topic, score_key),
+            reverse=True
+        )
+        self._render_topics(self.current_topics, self.current_model_used, sort_label=label)
+
+    def _render_topics(self, topics, model_used="AI", sort_label=None):
+        self._clear_results()
+        suffix = f" • sorted by {sort_label}" if sort_label else ""
+        self.lbl_result_count.setText(f"✓ {len(topics)} topics via {model_used}{suffix}")
+        self.output_header.setText(f"| TOPICS ({len(topics)})")
+        self.output_header.show()
+
+        for i, t in enumerate(topics, 1):
+            t_name = t.get("topic_name", "Unknown Topic")
+            t_titles = [
+                (
+                    item.get("text", ""),
+                    "{} | score {}".format(item.get("formula", ""), item.get("score", "-"))
+                )
+                for item in t.get("titles", [])
+            ]
+            t_angle = t.get("unique_angle", "")
+            t_hook = t.get("hook_sentence", "")
+            t_tags = t.get("tags", [])
+            t_ctr = str(t.get("ctr_level", "HIGH"))
+            t_diff = str(t.get("difficulty_level", "MEDIUM"))
+
+            card = TopicCard(i, t_name, t_titles, t_angle, t_hook, t_tags, t_ctr, t_diff, details=t)
+            card.btn_save.clicked.connect(
+                lambda checked=False, topic_data=t, card_widget=card: self._save_topic_to_profile(topic_data, card_widget)
+            )
+            self.results_layout.addWidget(card)
 
     def _on_worker_result(self, result_str):
         if result_str.startswith("❌"):
@@ -363,24 +470,9 @@ class TopicIdeatorTab(QWidget):
             data = json.loads(result_str)
             topics = data.get("topics", [])
             model_used = data.get("model_used", "AI")
-            
-            self.lbl_result_count.setText(f"✓ {len(topics)} topics via {model_used}")
-            self.output_header.setText(f"| TOPICS ({len(topics)})")
-            self.output_header.show()
-
-            for i, t in enumerate(topics, 1):
-                t_name = t.get("topic_name", "Unknown Topic")
-                t_titles = [(item.get("text", ""), item.get("formula", "")) for item in t.get("titles", [])]
-                t_angle = t.get("unique_angle", "")
-                t_hook = t.get("hook_sentence", "")
-                t_tags = t.get("tags", [])
-                t_ctr = str(t.get("ctr_level", "HIGH"))
-                t_diff = str(t.get("difficulty_level", "MEDIUM"))
-
-                card = TopicCard(i, t_name, t_titles, t_angle, t_hook, t_tags, t_ctr, t_diff)
-                # Kết nối nút Save của card với hàm lưu vào profile
-                card.btn_save.clicked.connect(lambda checked=False, topic_data=t, card_widget=card: self._save_topic_to_profile(topic_data, card_widget))
-                self.results_layout.addWidget(card)
+            self.current_topics = topics
+            self.current_model_used = model_used
+            self._render_topics(self.current_topics, self.current_model_used)
 
         except Exception as e:
             lbl_err = QLabel(f"❌ Lỗi parse JSON từ AI: {str(e)}\n\nData nhận được:\n{result_str}")

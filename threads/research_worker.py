@@ -18,6 +18,44 @@ load_dotenv(dotenv_path=env_path)
 #  Builds the research prompt based on topic + structure hint
 # ============================================================
 
+def _list_to_lines(items, prefix="- "):
+    if not isinstance(items, list):
+        return str(items or "").strip()
+    return "\n".join(f"{prefix}{str(item).strip()}" for item in items if str(item).strip())
+
+
+def _research_strategy_block(strategy: dict) -> str:
+    if not isinstance(strategy, dict) or not strategy:
+        return ""
+
+    return f"""
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+TOPIC STRATEGY FROM TOPIC IDEATOR
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+Use this brief to decide what evidence to prioritise. Do not blindly validate the angle; actively check where it is strong, weak, or unsupported.
+
+- Original topic: {strategy.get("title") or strategy.get("topic_name", "")}
+- Selected title: {strategy.get("selected_title_text", "")}
+- Target audience: {strategy.get("target_audience", "")}
+- Viewer promise: {strategy.get("one_line_promise", "")}
+- Viewer question: {strategy.get("viewer_question", "")}
+- Unique angle: {strategy.get("unique_angle", "")}
+- Better angle: {strategy.get("our_better_angle", "")}
+- Local/Vietnam angle: {strategy.get("local_vietnam_angle", "")}
+- Risk/watchout: {strategy.get("risk_or_watchout", "")}
+
+Evidence requested by Topic Ideator:
+{_list_to_lines(strategy.get("evidence_needed", []))}
+
+Research keywords to prioritise:
+{_list_to_lines(strategy.get("research_keywords", []))}
+
+Retention hooks to fact-check or support:
+{_list_to_lines(strategy.get("retention_hooks", []))}
+"""
+
+
 def build_research_prompt(config: dict) -> tuple[str, str]:
     topic        = config.get("topic", "")
     lang         = config.get("lang", "Vietnamese")
@@ -25,6 +63,7 @@ def build_research_prompt(config: dict) -> tuple[str, str]:
     target_mins  = config.get("target_mins", 10)
     target_words = config.get("target_words", 1550)
     extra        = config.get("extra_context", "")
+    strategy     = config.get("topic_strategy", {})
 
     # Determine research depth hint based on structure
     structure_hint_map = {
@@ -44,6 +83,7 @@ def build_research_prompt(config: dict) -> tuple[str, str]:
     structure_hint = structure_hint_map.get(structure, structure_hint_map["Auto"])
 
     extra_block = f"\nExtra context from creator: {extra}" if extra else ""
+    strategy_block = _research_strategy_block(strategy)
 
     system_prompt = """You are a professional research analyst and fact-checker for a YouTube content team.
 Your job is to gather, organise, and present verified factual data that a scriptwriter will use to write an accurate, credible video script.
@@ -65,7 +105,7 @@ RESEARCH REQUEST
 - Output language: {lang}
 - Script length  : ~{target_words} words / {target_mins} minutes
 - Script structure: {structure}
-- Structure focus: {structure_hint}{extra_block}
+- Structure focus: {structure_hint}{extra_block}{strategy_block}
 
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 RESEARCH SCOPE — COVER ALL OF THESE
@@ -94,6 +134,11 @@ RESEARCH SCOPE — COVER ALL OF THESE
 6. NAMED ENTITIES (for fact accuracy)
    - Key organisations, laws, reports, or studies the script might reference
    - Correct names and basic descriptions
+
+7. VALIDATION FOR SCRIPT STRATEGY
+   - Which parts of the Topic Ideator angle are well-supported
+   - Which claims need hedging or should be avoided
+   - What evidence can support the hook, retention loops, and final conclusion
 
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 REQUIRED OUTPUT FORMAT — FOLLOW EXACTLY
@@ -148,6 +193,15 @@ REQUIRED OUTPUT FORMAT — FOLLOW EXACTLY
 ### 🏷️ 6. NAMED ENTITIES
 
 - **[Entity name]:** [One-line description — what it is and why relevant]
+
+---
+
+### ✅ 7. STRATEGY VALIDATION NOTES
+
+- **Supported angle:** [Which parts of the Topic Ideator angle are supported by available evidence]
+- **Needs hedging:** [Which parts need softer wording or caveats]
+- **Avoid saying:** [Claims that would be too broad, unsupported, or misleading]
+- **Best evidence for hook:** [1-2 strongest evidence points the script should use early]
 
 ---
 
