@@ -20,10 +20,18 @@ except ImportError:
     genai = None
     types = None
 from dotenv import load_dotenv
+from threads.gemini_retry import generate_content_with_retries
 
 load_dotenv()
 
 MODEL = "gemini-3.5-flash"
+
+
+def _clip_context(text, limit=10000):
+    text = (text or "").strip()
+    if len(text) <= limit:
+        return text
+    return text[:limit] + "\n...[TRUNCATED]..."
 
 # ──────────────────────────────────────────────
 # SYSTEM PROMPTS
@@ -38,12 +46,16 @@ RULES:
 3. Adapt CLOTHING and ERA-SPECIFIC details from the asset description provided.
    - If charStyle says "dark hoodie" but the character is ancient Egyptian → replace with
      "white linen kalasiris robe, gold collar" while keeping all other charStyle rules.
-4. Keep every non-clothing attribute from charStyle unchanged
+4. Use CHANNEL VISUAL DNA and STYLE GUIDE only for visual identity, mood, palette, cultural setting, recurring props, and forbidden visuals.
+   - If they define a protagonist identity, silhouette rule, face-visibility rule, recurring props, or anti-luxury/no-logo rule, preserve it.
+   - Do not use writing/tone/title rules unless they imply a visible design constraint.
+5. Keep every non-clothing attribute from charStyle unchanged
    (outline weight, shading technique, skin tone, proportions, eye style, etc.)
-5. End EXACTLY with:
+6. Never include readable text, logo, brand mark, celebrity likeness, or copyrighted character likeness.
+7. End EXACTLY with:
    "Professional white background, TOP ROW 4 full-body views front 45-degree side back,
    BOTTOM ROW 6 expression close-ups."
-6. Output ONLY the prompt string. No JSON, no explanation, no markdown."""
+8. Output ONLY the prompt string. No JSON, no explanation, no markdown."""
 
 BG_SYSTEM = """You are an expert AI image prompt engineer.
 Generate a single background reference sheet prompt.
@@ -55,17 +67,37 @@ RULES:
    - If bgStyle mentions "Vietnamese urban night" but the location is ancient Egypt →
      keep the lighting/shading technique but replace architecture with Egyptian setting
      (sandstone walls, torchlight instead of neon, hieroglyph reliefs on walls, etc.)
-4. Keep atmosphere and lighting style from bgStyle (single directional source, shadow zones, etc.)
-5. End EXACTLY with:
+4. Use CHANNEL VISUAL DNA and STYLE GUIDE only for visual identity, mood, palette, cultural setting, recurring props, and forbidden visuals.
+   - Preserve recurring channel locations, palette, lighting, anti-luxury rules, no-logo rules, and cultural fit when compatible with this asset.
+   - Do not use writing/tone/title rules unless they imply a visible design constraint.
+5. Keep atmosphere and lighting style from bgStyle (single directional source, shadow zones, etc.)
+6. Never include readable text, logo, brand mark, celebrity likeness, or copyrighted character likeness.
+7. End EXACTLY with:
    "NO characters NO people NO text NO words, 16:9."
-6. Output ONLY the prompt string. No JSON, no explanation, no markdown."""
+8. Output ONLY the prompt string. No JSON, no explanation, no markdown."""
 
 
 # ──────────────────────────────────────────────
 # USER MESSAGE BUILDERS
 # ──────────────────────────────────────────────
 
-def build_char_user_message(asset_name, asset_info, char_style, scene_style):
+def build_channel_context(channel_desc="", topic="", channel_dna="", style_guide=""):
+    return f"""=== CHANNEL / VIDEO CONTEXT ===
+Channel description:
+{channel_desc or "No channel description provided."}
+
+Video topic:
+{topic or "No video topic provided."}
+
+CHANNEL DNA - use only visual/brand-identity rules relevant to image prompts:
+{_clip_context(channel_dna)}
+
+STYLE GUIDE - use only visual rules relevant to image prompts:
+{_clip_context(style_guide)}
+"""
+
+
+def build_char_user_message(asset_name, asset_info, char_style, scene_style, channel_desc="", topic="", channel_dna="", style_guide=""):
     samples = "\n".join(f"- {s}" for s in asset_info.get("sample_scenes", []))
     return f"""=== SCENE STYLE (paste verbatim at start) ===
 {scene_style}
@@ -73,12 +105,20 @@ def build_char_user_message(asset_name, asset_info, char_style, scene_style):
 === CHARACTER STYLE (aesthetic base) ===
 {char_style}
 
+{build_channel_context(channel_desc, topic, channel_dna, style_guide)}
+
 === CHARACTER TO GENERATE ===
 Name: {asset_name}
 Display name: {asset_info.get("display_name", asset_name)}
 Era/Context: {asset_info.get("era_context", "modern")}
 Description from script:
 {asset_info.get("description", "No description available.")}
+Continuity traits:
+{asset_info.get("continuity_traits", "No continuity traits available.")}
+Scene state rules:
+{asset_info.get("scene_state_rules", "No scene state rules available.")}
+Do not show:
+{asset_info.get("do_not_show", "No do-not-show rules available.")}
 
 Sample scenes this character appears in:
 {samples}
@@ -86,7 +126,7 @@ Sample scenes this character appears in:
 Generate the character reference sheet prompt now."""
 
 
-def build_bg_user_message(asset_name, asset_info, bg_style, scene_style):
+def build_bg_user_message(asset_name, asset_info, bg_style, scene_style, channel_desc="", topic="", channel_dna="", style_guide=""):
     samples = "\n".join(f"- {s}" for s in asset_info.get("sample_scenes", []))
     return f"""=== SCENE STYLE (paste verbatim at start) ===
 {scene_style}
@@ -94,12 +134,20 @@ def build_bg_user_message(asset_name, asset_info, bg_style, scene_style):
 === BACKGROUND STYLE (aesthetic base) ===
 {bg_style}
 
+{build_channel_context(channel_desc, topic, channel_dna, style_guide)}
+
 === BACKGROUND TO GENERATE ===
 Name: {asset_name}
 Display name: {asset_info.get("display_name", asset_name)}
 Era/Context: {asset_info.get("era_context", "modern")}
 Description from script:
 {asset_info.get("description", "No description available.")}
+Continuity traits:
+{asset_info.get("continuity_traits", "No continuity traits available.")}
+Scene state rules:
+{asset_info.get("scene_state_rules", "No scene state rules available.")}
+Do not show:
+{asset_info.get("do_not_show", "No do-not-show rules available.")}
 
 Sample scenes set in this location:
 {samples}
@@ -111,7 +159,7 @@ Generate the background reference sheet prompt now."""
 # API CALL
 # ──────────────────────────────────────────────
 
-def call_api(system_prompt, user_message):
+def call_api(system_prompt, user_message, progress_callback=None, log_prefix="ASSET_PROMPT"):
     if genai is None:
         raise ImportError("Thư viện 'google-genai' chưa được cài đặt.")
         
@@ -125,10 +173,14 @@ def call_api(system_prompt, user_message):
         temperature=0.7
     )
     
-    response = client.models.generate_content(
-        model=MODEL,
-        contents=user_message,
-        config=gen_config
+    response, _ = generate_content_with_retries(
+        client=client,
+        build_request=lambda model_name: {
+            "contents": user_message,
+            "config": gen_config,
+        },
+        progress_callback=progress_callback,
+        log_prefix=log_prefix,
     )
     return response.text.strip()
 
@@ -142,6 +194,10 @@ def generate_all_prompts(
     char_style,
     bg_style,
     scene_style,
+    channel_desc="",
+    topic="",
+    channel_dna="",
+    style_guide="",
     on_progress=None,
     on_success=None,
     on_error=None,
@@ -183,15 +239,27 @@ def generate_all_prompts(
         for name, info in characters.items():
             if on_progress:
                 on_progress(f"[{done+1}/{total}] Character: {name}...")
-            msg = build_char_user_message(name, info, char_style, scene_style)
-            result["characters"][name] = call_api(CHAR_SYSTEM, msg)
+            msg = build_char_user_message(
+                name, info, char_style, scene_style,
+                channel_desc=channel_desc,
+                topic=topic,
+                channel_dna=channel_dna,
+                style_guide=style_guide,
+            )
+            result["characters"][name] = call_api(CHAR_SYSTEM, msg, on_progress, "ASSET_CHAR")
             done += 1
 
         for name, info in backgrounds.items():
             if on_progress:
                 on_progress(f"[{done+1}/{total}] Background: {name}...")
-            msg = build_bg_user_message(name, info, bg_style, scene_style)
-            result["backgrounds"][name] = call_api(BG_SYSTEM, msg)
+            msg = build_bg_user_message(
+                name, info, bg_style, scene_style,
+                channel_desc=channel_desc,
+                topic=topic,
+                channel_dna=channel_dna,
+                style_guide=style_guide,
+            )
+            result["backgrounds"][name] = call_api(BG_SYSTEM, msg, on_progress, "ASSET_BG")
             done += 1
 
         if on_success:

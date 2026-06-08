@@ -24,17 +24,43 @@ _BRAND_KEYWORDS = [
     "coca", "pepsi", "heineken", "tiger",
 ]
 
-def make_glabs_safe_name(kebab_name: str, location_index: int) -> str:
+_PROPER_NAME_KEYWORDS = [
+    "ha-noi", "hanoi", "thu-do-ha-noi", "ho-chi-minh", "sai-gon", "saigon",
+    "da-nang", "hue", "viet-nam", "vietnam", "tokyo", "new-york", "paris",
+    "london", "beijing", "singapore",
+]
+
+_IP_CHARACTER_KEYWORDS = [
+    "doraemon", "nobita", "pikachu", "pokemon", "mickey", "minnie",
+    "donald-duck", "superman", "batman", "spiderman", "spider-man",
+    "iron-man", "naruto", "luffy", "goku", "mario", "sonic",
+]
+
+_SAFE_GENERIC_NAMES = {
+    "none", "protagonist", "main-character", "viewer", "narrator",
+    "phong-tro", "can-phong", "truong-hoc", "lop-hoc", "duong-pho",
+    "quan-ca-phe", "van-phong", "mai-nha", "ben-xe", "nha-tro",
+}
+
+
+def needs_policy_safe_name(kebab_name: str) -> bool:
+    lower = (kebab_name or "").lower()
+    if not lower or lower in _SAFE_GENERIC_NAMES:
+        return False
+    sensitive_keywords = _BRAND_KEYWORDS + _PROPER_NAME_KEYWORDS + _IP_CHARACTER_KEYWORDS
+    return any(keyword in lower for keyword in sensitive_keywords)
+
+
+def make_glabs_safe_name(kebab_name: str, asset_index: int, asset_type: str = "background") -> str:
     """
     Chuyển kebab-name sang tên an toàn cho G-Labs prompt.
-    - Nếu chứa brand keyword → 'Location{N:02d}'
+    - Nếu chứa brand/IP/tên riêng/địa danh → Location{N:02d} hoặc Character{N:02d}
     - Nếu tên Việt bình thường  → PascalCase (QuanPhoSang)
-    - Nhân vật                  → 'Protagonist' / 'Character{N}'
     """
     lower = kebab_name.lower()
-    for brand in _BRAND_KEYWORDS:
-        if brand in lower:
-            return f"Location{location_index:02d}"
+    if needs_policy_safe_name(lower):
+        prefix = "Character" if asset_type == "character" else "Location"
+        return f"{prefix}{asset_index:02d}"
     # PascalCase từ kebab
     return "".join(word.capitalize() for word in kebab_name.split("-"))
 
@@ -92,6 +118,15 @@ def build_glabs_prompt(scene_style: str, camera: str,
         f"as {action_desc.strip().rstrip('.')}. "
         f"NO TEXT NO WORDS on image."
     )
+
+
+def apply_safe_asset_names(prompt: str, rename_map: dict[str, str]) -> str:
+    result = prompt or ""
+    for original, safe in rename_map.items():
+        if not original:
+            continue
+        result = result.replace(f"[{original}]", f"[{safe}]")
+    return result
 
 
 # Default sceneStyle dùng khi field trống — user nên override bằng style của kênh mình
@@ -568,7 +603,7 @@ class ProductionNotesWidget(QWidget):
 # ══════════════════════════════════════════════════════════════════════
 
 class SceneBreakdownTab(QWidget):
-    transfer_to_tool3 = pyqtSignal(str, str)
+    transfer_to_tool3 = pyqtSignal(str, str, dict)
 
     def __init__(self):
         super().__init__()
@@ -618,31 +653,6 @@ class SceneBreakdownTab(QWidget):
         for col, w in enumerate([self.txt_style, self.txt_lang, self.txt_min, self.txt_max]):
             grid.addWidget(w, 1, col)
         lay.addLayout(grid)
-
-        # ── SCENE STYLE (dùng để build G-Labs prompt) ───────────────
-        scene_style_head = QHBoxLayout()
-        lbl_ss = QLabel("SCENE STYLE PROMPT (dùng cho G-Labs)")
-        lbl_ss.setObjectName("muted")
-        self.btn_reset_style = QPushButton("↺ Reset về Default")
-        self.btn_reset_style.setStyleSheet(
-            "background: transparent; color: #606075; border: 1px solid #353545; "
-            "border-radius: 4px; padding: 3px 10px; font-size: 11px;")
-        self.btn_reset_style.setCursor(QCursor(Qt.CursorShape.PointingHandCursor))
-        self.btn_reset_style.clicked.connect(
-            lambda: self.txt_scene_style.setPlainText(DEFAULT_SCENE_STYLE))
-        scene_style_head.addWidget(lbl_ss)
-        scene_style_head.addStretch()
-        scene_style_head.addWidget(self.btn_reset_style)
-        lay.addLayout(scene_style_head)
-
-        self.txt_scene_style = QTextEdit()
-        self.txt_scene_style.setFixedHeight(72)
-        # Điền sẵn default — user paste style của kênh mình vào đây để override
-        self.txt_scene_style.setPlainText(DEFAULT_SCENE_STYLE)
-        self.txt_scene_style.setStyleSheet(
-            "background: #0F0F18; border: 1px solid #252535; border-radius: 6px; "
-            "color: #3AD68A; font-size: 11px; padding: 8px; font-family: 'Space Mono', monospace;")
-        lay.addWidget(self.txt_scene_style)
 
         # ── SPLITTER: KỊCH BẢN & PREVIEW ────────────────────────────
         splitter = QSplitter(Qt.Orientation.Horizontal)
@@ -885,6 +895,11 @@ class SceneBreakdownTab(QWidget):
         # ── STATE ────────────────────────────────────────────────────
         self._assigned_data: list[dict] = []   # cache dữ liệu assign mới nhất
         self._prescan_data:  dict       = {}   # cache prescan enriched
+        self._pipeline_running = False
+        self._char_style = ""
+        self._bg_style = ""
+        self._scene_style = DEFAULT_SCENE_STYLE
+        self._load_visual_styles_from_profile(apply_scene_style=True)
 
     # ──────────────────────────────────────────────────────────────────
     # TAB SWITCHING
@@ -971,8 +986,27 @@ class SceneBreakdownTab(QWidget):
             for t, c in topics:
                 if t == title:
                     self.txt_script.setPlainText(c); break
+        self._load_visual_styles_from_profile(apply_scene_style=True)
 
-    def _clean_script(self):
+    def _load_visual_styles_from_profile(self, apply_scene_style=False):
+        active_profile_file = "active_profile.json"
+        if not os.path.exists(active_profile_file):
+            return
+        try:
+            with open(active_profile_file, "r", encoding="utf-8") as file:
+                profile_data = json.load(file)
+        except Exception:
+            return
+
+        self._char_style = profile_data.get("char_style", "").strip()
+        self._bg_style = profile_data.get("bg_style", "").strip()
+        profile_scene_style = profile_data.get("scene_style", "").strip()
+        if profile_scene_style:
+            self._scene_style = profile_scene_style
+        elif not self._scene_style:
+            self._scene_style = DEFAULT_SCENE_STYLE
+
+    def _clean_script(self, silent=False):
         text = self.txt_script.toPlainText()
         if not text:
             QMessageBox.warning(self, "Trống", "Paste kịch bản trước."); return
@@ -990,9 +1024,10 @@ class SceneBreakdownTab(QWidget):
             s = re.sub(r'\[.*?\]', '', s).strip().replace('*', '')
             if s: cleaned.append(s)
         self.txt_script.setPlainText('\n\n'.join(cleaned))
-        QMessageBox.information(self, "OK", "Đã lọc script!")
+        if not silent:
+            QMessageBox.information(self, "OK", "Đã lọc script!")
 
-    def _split_scenes(self):
+    def _split_scenes(self, silent=False):
         text = self.txt_script.toPlainText().strip()
         if not text: QMessageBox.warning(self, "Lỗi", "Không có kịch bản."); return
         try:
@@ -1014,12 +1049,72 @@ class SceneBreakdownTab(QWidget):
         self.txt_preview.setPlainText(out)
         self.lbl_scene_count.setText(f"{len(scenes)} scenes")
         self._populate_table(scenes)
-        QMessageBox.information(self, "OK", f"Đã chia thành {len(scenes)} scenes!")
+        if not silent:
+            QMessageBox.information(self, "OK", f"Đã chia thành {len(scenes)} scenes!")
 
     def _get_current_scenes_from_table(self):
         return [self.table_scenes.item(r, 2).text()
                 for r in range(self.table_scenes.rowCount())
                 if self.table_scenes.item(r, 2)]
+
+    def _duration_to_seconds(self, value: str) -> int:
+        match = re.search(r"\d+", str(value or ""))
+        return int(match.group(0)) if match else 5
+
+    def _seconds_to_duration(self, seconds: int) -> str:
+        return f"{max(1, int(seconds))}s"
+
+    def _refresh_generated_tabs(self, switch_to_glabs=False):
+        scene_style = self._scene_style or DEFAULT_SCENE_STYLE
+        char_index: dict[str, int] = {}
+        char_counter = 1
+        bg_location_index: dict[str, int] = {}
+        loc_counter = 1
+        for scene in self._assigned_data:
+            char = scene.get("character", "none")
+            if char and char != "none" and char not in char_index:
+                char_index[char] = char_counter
+                char_counter += 1
+            bg = scene.get("background", "")
+            if bg and bg not in bg_location_index:
+                bg_location_index[bg] = loc_counter
+                loc_counter += 1
+
+        rename_map: dict[str, str] = {}
+        glabs_prompts: list[str] = []
+        for scene in self._assigned_data:
+            char = scene.get("character", "none")
+            bg = scene.get("background", "")
+            char_safe = make_glabs_safe_name(char, char_index.get(char, 1), "character") if char and char != "none" else "Protagonist"
+            bg_safe = make_glabs_safe_name(bg, bg_location_index.get(bg, 1), "background")
+            scene["char_safe"] = char_safe
+            scene["bg_safe"] = bg_safe
+            rename_map[char] = char_safe
+            rename_map[bg] = bg_safe
+            image_prompt = scene.get("image_prompt", "").strip()
+            if image_prompt:
+                glabs_prompts.append(apply_safe_asset_names(image_prompt, rename_map))
+            else:
+                glabs_prompts.append(
+                    build_glabs_prompt(scene_style, scene.get("camera", "Medium shot"), char_safe, bg_safe, scene.get("action_desc", "standing still"))
+                )
+
+        self.tab_glabs.load_prompts(glabs_prompts, rename_map)
+        self.tab_veo3.load_prompts(self._assigned_data, scene_style)
+        self.tab_assets.load_assets(self._assigned_data)
+        self.tab_camera.load_data(self._assigned_data)
+
+        chars_unique = list({s["character"] for s in self._assigned_data if s.get("character") != "none"})
+        bgs_unique = list({s["background"] for s in self._assigned_data if s.get("background")})
+        self.tab_notes.load_checklist(chars_unique, bgs_unique)
+
+        self.card_scenes.lbl_val.setText(str(len(self._assigned_data)))
+        self.card_assigned.lbl_val.setText(str(len(self._assigned_data)))
+        total_seconds = sum(self._duration_to_seconds(s.get("dur", "5s")) for s in self._assigned_data)
+        mins, secs = divmod(total_seconds, 60)
+        self.card_duration.lbl_val.setText(f"{mins:02d}m{secs:02d}s")
+        if switch_to_glabs:
+            self.tabs_bar.setCurrentIndex(1)
 
     def _pre_scan(self):
         scenes = self._get_current_scenes_from_table()
@@ -1038,8 +1133,18 @@ class SceneBreakdownTab(QWidget):
         bgs   = self.txt_prescan_bgs.toPlainText().strip()
         if not chars or not bgs:
             QMessageBox.warning(self, "Thiếu dữ liệu", "Chạy Pre-scan trước!"); return
+        self._load_visual_styles_from_profile(apply_scene_style=False)
+        scene_style = self._scene_style or DEFAULT_SCENE_STYLE
         self.btn_assign.setEnabled(False); self.btn_assign.setText("⏳ Đang Assign...")
-        self.worker = SceneWorker("assign", {"scenes": scenes, "characters": chars, "backgrounds": bgs})
+        self.worker = SceneWorker("assign", {
+            "scenes": scenes,
+            "characters": chars,
+            "backgrounds": bgs,
+            "char_style": self._char_style,
+            "bg_style": self._bg_style,
+            "scene_style": scene_style,
+            "prescan_data": self._prescan_data,
+        })
         self.worker.result_signal.connect(self._handle_worker_result)
         self.worker.error_signal.connect(lambda e: QMessageBox.critical(self, "Lỗi AI", e))
         self.worker.finished_signal.connect(lambda: [self.btn_assign.setEnabled(True), self.btn_assign.setText("⚡ Assign Assets")])
@@ -1077,12 +1182,17 @@ class SceneBreakdownTab(QWidget):
             self.card_bgs.lbl_val.setText(str(len(bgs_list)))
             self.card_bgs.lbl_val.setStyleSheet("font-size: 20px; font-weight: bold; color: #9B7FFF; font-family: monospace;")
 
+            if self._pipeline_running:
+                self._assign_assets()
+
         elif task_type == "assign":
             scenes_data = data.get("scenes", [])
-            scene_style = self.txt_scene_style.toPlainText().strip()
+            scene_style = self._scene_style or DEFAULT_SCENE_STYLE
 
             # ── 1. Cập nhật bảng Scene List ──
             assigned_count = 0
+            char_index: dict[str, int] = {}
+            char_counter = 1
             bg_location_index: dict[str, int] = {}  # map bg → location index (cho brand names)
             loc_counter = 1
 
@@ -1102,6 +1212,9 @@ class SceneBreakdownTab(QWidget):
                         cell.setFont(QFont())
 
                 # Build safe names cho G-Labs
+                if char and char != "none" and char not in char_index:
+                    char_index[char] = char_counter
+                    char_counter += 1
                 if bg not in bg_location_index:
                     bg_location_index[bg] = loc_counter
                     loc_counter += 1
@@ -1118,31 +1231,35 @@ class SceneBreakdownTab(QWidget):
                 char   = item.get("character", "none")
                 bg     = item.get("background", "")
                 cam    = item.get("camera", "Medium shot")
+                image_prompt = item.get("image_prompt", "").strip()
                 vo_txt = self.table_scenes.item(row, 2).text() if 0 <= row < self.table_scenes.rowCount() and self.table_scenes.item(row, 2) else ""
 
                 # Safe names
-                char_safe = make_glabs_safe_name(char, 0) if char and char != "none" else "Protagonist"
-                bg_safe   = make_glabs_safe_name(bg, bg_location_index.get(bg, 1))
+                char_safe = make_glabs_safe_name(char, char_index.get(char, 1), "character") if char and char != "none" else "Protagonist"
+                bg_safe   = make_glabs_safe_name(bg, bg_location_index.get(bg, 1), "background")
 
                 rename_map[char] = char_safe
                 rename_map[bg]   = bg_safe
 
                 # Action description = VO rút gọn xuống ≤ 15 words
                 words = vo_txt.split()
-                action = " ".join(words[:15]) + ("..." if len(words) > 15 else "")
+                action = item.get("action_desc", "").strip() or " ".join(words[:15]) + ("..." if len(words) > 15 else "")
                 action = action.lower().rstrip(".")
 
                 dur_item = self.table_scenes.item(row, 6)
                 dur = dur_item.text() if dur_item else "5s"
 
-                prompt = build_glabs_prompt(scene_style, cam, char_safe, bg_safe, action)
+                if image_prompt:
+                    prompt = apply_safe_asset_names(image_prompt, rename_map)
+                else:
+                    prompt = build_glabs_prompt(scene_style, cam, char_safe, bg_safe, action)
                 glabs_prompts.append(prompt)
 
                 enriched_scene_data.append({
                     "id": item.get("id", row+1),
                     "character": char, "background": bg, "camera": cam,
                     "char_safe": char_safe, "bg_safe": bg_safe,
-                    "action_desc": action, "dur": dur,
+                    "action_desc": action, "image_prompt": prompt, "dur": dur, "vo_text": vo_txt,
                 })
 
             self._assigned_data = enriched_scene_data
@@ -1168,15 +1285,89 @@ class SceneBreakdownTab(QWidget):
             # Auto-switch sang tab G-Labs
             self.tabs_bar.setCurrentIndex(1)
 
-    def _deduplicate(self):
-        QMessageBox.information(self, "Deduplicate", "Đang phát triển.")
+            if self._pipeline_running:
+                self._deduplicate(silent=True)
+                self._pipeline_running = False
+                QMessageBox.information(self, "✅ Pipeline hoàn tất",
+                    "Đã chạy Lọc Script → Split Scenes → Pre-scan → Assign Assets → Deduplicate.")
+
+    def _deduplicate(self, silent=False):
+        if not self._assigned_data:
+            if not silent:
+                QMessageBox.warning(self, "Trống", "Chạy Assign Assets trước.")
+            return
+
+        original_count = len(self._assigned_data)
+        merged: list[dict] = []
+        for scene in self._assigned_data:
+            current = dict(scene)
+            current["dur_seconds"] = self._duration_to_seconds(current.get("dur", "5s"))
+            if (
+                merged
+                and merged[-1].get("character") == current.get("character")
+                and merged[-1].get("background") == current.get("background")
+            ):
+                previous = merged[-1]
+                previous["vo_text"] = " ".join(
+                    part for part in [previous.get("vo_text", ""), current.get("vo_text", "")] if part
+                ).strip()
+                previous["dur_seconds"] += current["dur_seconds"]
+                previous["dur"] = self._seconds_to_duration(previous["dur_seconds"])
+                previous["action_desc"] = "; ".join(
+                    part for part in [previous.get("action_desc", ""), current.get("action_desc", "")] if part
+                )[:220]
+            else:
+                merged.append(current)
+
+        for index, scene in enumerate(merged, 1):
+            scene["id"] = index
+            scene["dur"] = self._seconds_to_duration(scene.pop("dur_seconds", self._duration_to_seconds(scene.get("dur", "5s"))))
+
+        if len(merged) == len(self._assigned_data):
+            if not silent:
+                QMessageBox.information(self, "Deduplicate", "Không có scene liền kề nào trùng nhân vật + bối cảnh.")
+            return
+
+        self._assigned_data = merged
+        self._populate_table([scene.get("vo_text", scene.get("action_desc", "")) for scene in merged])
+        for row, scene in enumerate(merged):
+            for col, val, color in [
+                (3, scene.get("character", ""), "#E8E8F0"),
+                (4, scene.get("background", ""), "#E8E8F0"),
+                (5, scene.get("camera", ""), "#C8C8D8"),
+                (6, scene.get("dur", "5s"), "#3AD68A"),
+            ]:
+                cell = self.table_scenes.item(row, col)
+                if cell:
+                    cell.setText(val)
+                    cell.setForeground(QBrush(QColor(color)))
+                    cell.setFont(QFont())
+
+        self.txt_preview.setPlainText(
+            "\n\n".join(f"[Scene {scene['id']:03d}]\n{scene.get('vo_text', '')}" for scene in merged)
+        )
+        self.lbl_scene_count.setText(f"{len(merged)} scenes")
+        self._refresh_generated_tabs(switch_to_glabs=True)
+
+        if not silent:
+            QMessageBox.information(
+                self,
+                "Deduplicate",
+                f"Đã gộp còn {len(merged)} scenes từ {original_count} scenes đã assign."
+            )
 
     def _run_pipeline(self):
-        QMessageBox.information(self, "Run Pipeline", "Đang phát triển.")
+        if not self.txt_script.toPlainText().strip():
+            QMessageBox.warning(self, "Trống", "Paste hoặc load kịch bản trước.")
+            return
+        self._pipeline_running = True
+        self._clean_script(silent=True)
+        self._split_scenes(silent=True)
+        self._pre_scan()
 
     def _transfer_to_tool3(self):
         chars = self.txt_prescan_chars.toPlainText().strip()
         bgs   = self.txt_prescan_bgs.toPlainText().strip()
         if not chars and not bgs:
             QMessageBox.warning(self, "Trống", "Chạy Pre-scan trước!"); return
-        self.transfer_to_tool3.emit(chars, bgs)
+        self.transfer_to_tool3.emit(chars, bgs, self._prescan_data)

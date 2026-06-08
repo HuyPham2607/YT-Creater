@@ -13,6 +13,7 @@ except ImportError:
     types = None
 from dotenv import load_dotenv
 from PyQt6.QtCore import QThread, pyqtSignal
+from threads.gemini_retry import get_gemini_model_chain, is_auth_error, is_retryable_error, should_try_next_model
 
 env_path = Path(__file__).parent.parent / '.env'
 PROJECT_ROOT = Path(__file__).parent.parent
@@ -368,9 +369,7 @@ class TopicWorker(QThread):
             profile_context = build_profile_cache_context(self.config)
 
             # Danh sách các model theo thứ tự ưu tiên (Fallback Chain)
-            model_priority = [
-                "gemini-3.5-flash"
-            ]
+            model_priority = get_gemini_model_chain()
 
             last_error = ""
             for model_name in model_priority:
@@ -441,16 +440,16 @@ class TopicWorker(QThread):
                         print(f"⚠️ [TOPIC_WORKER] {model_name} FAILED: {err_msg}")
                         last_error = f"[{model_name.split('/')[-1]}] {str(e)}"
                         
-                        # Nếu lỗi API Key bị lộ (403), dừng ngay lập tức vì thử model khác cũng vô ích
-                        if "leaked" in err_msg.lower() or "403" in err_msg.lower():
+                        # Nếu lỗi API Key/quyền truy cập, dừng ngay lập tức vì thử model khác cũng vô ích
+                        if is_auth_error(e):
                             self.result_signal.emit("❌ LỖI: API Key của bạn đã bị lộ hoặc không có quyền (403). Hãy kiểm tra file .env!")
                             self.finished_signal.emit()
                             return
 
                         # Nếu gặp lỗi hạn mức hoặc lỗi hệ thống, thử retry trước khi fallback
-                        if any(x in err_msg.lower() for x in ["429", "quota", "limit", "503", "overloaded", "not found", "deadline"]):
+                        if is_retryable_error(e):
                             if retries > 0:
-                                wait_time = 5
+                                wait_time = 5 * (3 - retries)
                                 print(f"⏳ [TOPIC_WORKER] {model_name} hit quota/limit. Retrying ({retries} left) in {wait_time}s...")
                                 time.sleep(wait_time)
                                 retries -= 1
@@ -458,6 +457,9 @@ class TopicWorker(QThread):
                             else:
                                 print(f"🔄 [TOPIC_WORKER] {model_name} exhausted retries. Falling back...")
                                 break # Dừng vòng lặp while để for loop chuyển sang model tiếp theo
+                        if should_try_next_model(e):
+                            print(f"🔄 [TOPIC_WORKER] {model_name} cannot continue. Falling back...")
+                            break
                         else:
                             print(f"⚠️ [TOPIC_WORKER] Unexpected error with {model_name}. Attempting fallback...")
                             break 

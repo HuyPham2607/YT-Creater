@@ -203,8 +203,8 @@ class MainWindow(QMainWindow):
             self.nav_group.setExclusive(True)
         self.content_area.setCurrentWidget(self.page_profile)
 
-    def on_transfer_to_tool3(self, chars, bgs):
-        self.tab_asset.load_assets_data(chars, bgs)
+    def on_transfer_to_tool3(self, chars, bgs, prescan_data=None):
+        self.tab_asset.load_assets_data(chars, bgs, prescan_data)
         self.content_area.setCurrentIndex(3)
         self.nav_group.button(3).setChecked(True)
 
@@ -214,5 +214,5 @@ class MainWindow(QMainWindow):
         if not chars and not bgs:
             QMessageBox.warning(self, "Trống", "Bên Tool 2 hiện chưa có dữ liệu Characters/Backgrounds (Pre-scan)!")
             return
-        self.tab_asset.load_assets_data(chars, bgs)
+        self.tab_asset.load_assets_data(chars, bgs, self.tab_scene._prescan_data)
         QMessageBox.information(self, "Thành công", "Đã nạp danh sách Characters và Backgrounds từ Tool 2!")

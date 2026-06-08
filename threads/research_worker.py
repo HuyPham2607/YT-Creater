@@ -8,6 +8,7 @@ except ImportError:
     types = None
 from dotenv import load_dotenv
 from PyQt6.QtCore import QThread, pyqtSignal
+from threads.gemini_retry import generate_content_with_retries
 
 env_path = Path(__file__).parent.parent / '.env'
 load_dotenv(dotenv_path=env_path)
@@ -240,8 +241,7 @@ class ResearchWorker(QThread):
             self.finished_signal.emit()
             return
 
-        client     = genai.Client(api_key=api_key)
-        model_name = "gemini-3.5-flash"
+        client = genai.Client(api_key=api_key)
 
         try:
             self.progress_signal.emit("🔍 Đang research thông tin...")
@@ -253,14 +253,18 @@ class ResearchWorker(QThread):
                 temperature=0.3   # Lower temp for factual research
             )
 
-            response = client.models.generate_content(
-                model=model_name,
-                contents=user_prompt,
-                config=gen_config
+            response, model_used = generate_content_with_retries(
+                client=client,
+                build_request=lambda model_name: {
+                    "contents": user_prompt,
+                    "config": gen_config,
+                },
+                progress_callback=self.progress_signal.emit,
+                log_prefix="RESEARCH_WORKER",
             )
 
             self.research_signal.emit(response.text)
-            self.progress_signal.emit("✅ Research xong — kiểm tra rồi bấm Viết Script")
+            self.progress_signal.emit(f"✅ Research xong bằng {model_used} — kiểm tra rồi bấm Viết Script")
 
         except Exception as e:
             self.error_signal.emit(f"❌ Lỗi Research: {str(e)}")

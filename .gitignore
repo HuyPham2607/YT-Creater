@@ -10,3 +10,4 @@ __pycache__/
 profiles.json
 crash_log.txt
 data/gemini_cache_index.json
+data/gemini_script_cache_index.json
