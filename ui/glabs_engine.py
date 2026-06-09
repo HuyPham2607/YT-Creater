@@ -1,33 +1,34 @@
-"""
-glabs_engine.py — v7
+﻿"""
+glabs_engine.py â€” v7
 Root cause fix:
-- Flow đôi khi UPDATE row hiện tại thay vì tạo row mới
-  → không thể dùng row index để lọc "new rows"
-  → quay lại dùng before_urls để phân biệt ảnh mới (như code gốc)
+- Flow Ä‘Ã´i khi UPDATE row hiá»‡n táº¡i thay vÃ¬ táº¡o row má»›i
+  â†’ khÃ´ng thá»ƒ dÃ¹ng row index Ä‘á»ƒ lá»c "new rows"
+  â†’ quay láº¡i dÃ¹ng before_urls Ä‘á»ƒ phÃ¢n biá»‡t áº£nh má»›i (nhÆ° code gá»‘c)
 
-- isBlocked: chỉ check row có chứa ảnh MỚI (src không có trong before_urls)
-  hoặc row có progress > 0 sau khi submit
-  → tránh false positive từ row cũ
+- isBlocked: chá»‰ check row cÃ³ chá»©a áº£nh Má»šI (src khÃ´ng cÃ³ trong before_urls)
+  hoáº·c row cÃ³ progress > 0 sau khi submit
+  â†’ trÃ¡nh false positive tá»« row cÅ©
 
-- Progress: lấy max từ TẤT CẢ row có ảnh mới / đang busy
-  (không lọc theo index)
+- Progress: láº¥y max tá»« Táº¤T Cáº¢ row cÃ³ áº£nh má»›i / Ä‘ang busy
+  (khÃ´ng lá»c theo index)
 
-- Điều kiện thoát: giữ relaxed check từ v6 nhưng áp dụng đúng
+- Äiá»u kiá»‡n thoÃ¡t: giá»¯ relaxed check tá»« v6 nhÆ°ng Ã¡p dá»¥ng Ä‘Ãºng
 """
 
 from playwright.sync_api import sync_playwright, Page
-import time, os, re, base64, socket, subprocess, sys
+import time, os, re, base64, socket, subprocess, sys, unicodedata
 from datetime import datetime
 from pathlib import Path
 
-# ──────────────────────────────────────────────────────
+# â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 # CONFIG
-# ──────────────────────────────────────────────────────
+# â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 FLOW_URL      = "https://labs.google/fx/tools/flow"
 CDP_ENDPOINT  = "http://127.0.0.1:9222"
 GEN_TIMEOUT   = 180
 STABLE_WAIT   = 3
 BETWEEN_DELAY = 2
+RX_FLOW_HELPER_DIR = str(Path(__file__).resolve().parents[1] / "extensions" / "rx-flow-helper")
 
 CHROME_PATHS_WINDOWS = [
     r"C:\Program Files\Google\Chrome\Application\chrome.exe",
@@ -49,51 +50,57 @@ def find_chrome_path():
 
 def ensure_chrome_running(log_fn):
     if is_port_open("127.0.0.1", 9222):
-        log_fn("✅ Chrome Debug đã sẵn sàng.")
+        log_fn("Chrome debug is ready.")
         return True
-    log_fn("🌐 Đang khởi động Chrome...")
+    log_fn("Starting Chrome debug profile...")
     chrome_exe = find_chrome_path()
     if not chrome_exe:
-        log_fn("❌ Không tìm thấy Chrome.")
+        log_fn("ERROR Chrome executable not found.")
         return False
     os.makedirs(PROFILE_DIR, exist_ok=True)
     cmd = [
         chrome_exe, "--remote-debugging-port=9222", "--remote-allow-origins=*",
-        f"--user-data-dir={PROFILE_DIR}", "--no-first-run", "--no-default-browser-check", FLOW_URL
+        f"--user-data-dir={PROFILE_DIR}", "--no-first-run", "--no-default-browser-check",
     ]
+    if os.path.exists(RX_FLOW_HELPER_DIR):
+        cmd.append(f"--load-extension={RX_FLOW_HELPER_DIR}")
+        log_fn(f"Loading RX Flow Helper extension: {RX_FLOW_HELPER_DIR}")
+    cmd.append(FLOW_URL)
     subprocess.Popen(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
     for _ in range(10):
         time.sleep(1)
         if is_port_open("127.0.0.1", 9222):
-            log_fn("✅ Chrome đã khởi động.")
+            log_fn("Chrome started.")
             time.sleep(2)
             return True
-    log_fn("❌ Không thể kích hoạt cổng Debug sau 10 giây.")
+    log_fn("ERROR Chrome debug port did not open after 10 seconds.")
     return False
 
 
-# ──────────────────────────────────────────────────────
+# â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 # SELECTORS
-# ──────────────────────────────────────────────────────
+# â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 NEW_PROJECT_SELECTORS = [
-    'button:has-text("Dự án mới")', 'button:has-text("New project")',
-    '[aria-label*="Dự án mới" i]',
+    'button:has-text("Dá»± Ã¡n má»›i")', 'button:has-text("New project")',
+    '[aria-label*="Dá»± Ã¡n má»›i" i]',
 ]
 PROMPT_SELECTORS = [
     'div[role="textbox"]', 'div[contenteditable="true"]',
-    'textarea[placeholder*="tạo" i]', 'textarea[placeholder*="What do you" i]', 'textarea',
+    'textarea[placeholder*="táº¡o" i]', 'textarea[placeholder*="What do you" i]', 'textarea',
 ]
 SUBMIT_SELECTORS = [
     'button:has(i:text-is("arrow_forward"))', 'button:has(i:text-is("send"))',
-    'button:has-text("arrow_forwardTạo")', 'button[type="submit"]:has-text("Tạo")',
+    'button:has-text("arrow_forwardTáº¡o")', 'button[type="submit"]:has-text("Táº¡o")',
     'button[type="submit"]:has-text("Create")', '[data-testid*="send"]', '[data-testid*="submit"]',
 ]
 
-# ──────────────────────────────────────────────────────
-# IMAGE SCAN JS — v7
-# Trả về rows với đầy đủ thông tin
-# isBlocked KHÔNG tự quyết định — caller tự kiểm tra dựa vào context
-# ──────────────────────────────────────────────────────
+IMAGE_EXTENSIONS = {".png", ".jpg", ".jpeg", ".webp"}
+
+# â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+# IMAGE SCAN JS â€” v7
+# Tráº£ vá» rows vá»›i Ä‘áº§y Ä‘á»§ thÃ´ng tin
+# isBlocked KHÃ”NG tá»± quyáº¿t Ä‘á»‹nh â€” caller tá»± kiá»ƒm tra dá»±a vÃ o context
+# â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 IMAGE_SCAN_JS = r"""
 () => {
     const rows = [];
@@ -107,23 +114,23 @@ IMAGE_SCAN_JS = r"""
                 '.generating, .is-generating, [aria-busy="true"], [class*="spinner"], g-progress-circular'
             );
 
-            // ĐẾM số lượng ảnh bị chặn trong container NÀY
+            // Äáº¾M sá»‘ lÆ°á»£ng áº£nh bá»‹ cháº·n trong container NÃ€Y
             const warningIcons = Array.from(container.querySelectorAll('i.google-symbols'))
                 .filter(i => i.innerText.trim() === 'warning');
             
             let blockedCount = 0;
             warningIcons.forEach(icon => {
                 const pTxt = (icon.parentElement ? icon.parentElement.innerText : "").toLowerCase();
-                if (pTxt.includes('vi phạm') || pTxt.includes('không thể tạo') || pTxt.includes('violate') || pTxt.includes('chính sách')) blockedCount++;
+                if (pTxt.includes('vi pháº¡m') || pTxt.includes('khÃ´ng thá»ƒ táº¡o') || pTxt.includes('violate') || pTxt.includes('chÃ­nh sÃ¡ch')) blockedCount++;
             });
             
-            // Fallback nếu không bóc được text cạnh icon
+            // Fallback náº¿u khÃ´ng bÃ³c Ä‘Æ°á»£c text cáº¡nh icon
             if (blockedCount === 0 && warningIcons.length > 0) {
                  const cTxt = (container.innerText || "").toLowerCase();
-                 if (cTxt.includes('vi phạm') || cTxt.includes('không thể tạo') || cTxt.includes('violate') || cTxt.includes('chính sách')) blockedCount = warningIcons.length;
+                 if (cTxt.includes('vi pháº¡m') || cTxt.includes('khÃ´ng thá»ƒ táº¡o') || cTxt.includes('violate') || cTxt.includes('chÃ­nh sÃ¡ch')) blockedCount = warningIcons.length;
             }
 
-            // TRÍCH XUẤT PROMPT TEXT CỦA DÒNG NÀY
+            // TRÃCH XUáº¤T PROMPT TEXT Cá»¦A DÃ’NG NÃ€Y
             let promptText = "Unknown Prompt";
             const reuseBtn = container.querySelector('.reuse-prompt-button');
             if (reuseBtn) {
@@ -132,7 +139,7 @@ IMAGE_SCAN_JS = r"""
                     promptText = btnContainer.previousElementSibling.innerText.trim();
                 }
             }
-            // Fallback nếu không tìm thấy nút reuse
+            // Fallback náº¿u khÃ´ng tÃ¬m tháº¥y nÃºt reuse
             if (promptText === "Unknown Prompt") {
                 const selectable = container.querySelector('[data-allow-text-selection="true"]');
                 if (selectable) {
@@ -174,8 +181,8 @@ IMAGE_SCAN_JS = r"""
         });
     }
 
-    // Fallback: không có role="article"
-    // Chỉ dùng fallback nếu hoàn toàn không tìm thấy danh sách chứa ảnh
+    // Fallback: khÃ´ng cÃ³ role="article"
+    // Chá»‰ dÃ¹ng fallback náº¿u hoÃ n toÃ n khÃ´ng tÃ¬m tháº¥y danh sÃ¡ch chá»©a áº£nh
     if (rows.length === 0 && document.querySelectorAll('div[data-testid="virtuoso-item-list"]').length === 0) {
         let globalProg = 0;
         const progressEls = document.querySelectorAll(
@@ -221,9 +228,9 @@ GET_ALL_URLS_JS = """
 """
 
 
-# ──────────────────────────────────────────────────────
+# â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 # HELPERS
-# ──────────────────────────────────────────────────────
+# â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 def find_el(page: Page, selectors: list, timeout=5000):
     combined_sel = ", ".join(selectors)
@@ -236,15 +243,15 @@ def find_el(page: Page, selectors: list, timeout=5000):
 
 
 def wait_for_project_page(page: Page, log_fn=print, timeout=20) -> bool:
-    log_fn("   ⏳ Chờ trang dự án...")
+    log_fn("   Waiting for project page...")
     deadline = time.time() + timeout
-    signals = ['text="Nhân vật"', 'text="Characters"', 'div[role="textbox"]', 'text="Cảnh"']
+    signals = ['text="NhÃ¢n váº­t"', 'text="Characters"', 'div[role="textbox"]', 'text="Cáº£nh"']
     while time.time() < deadline:
         for sig in signals:
             try:
                 el = page.query_selector(sig)
                 if el and el.is_visible():
-                    log_fn(f"   ✅ Trong dự án ({sig})")
+                    log_fn(f"   Project page ready ({sig})")
                     return True
             except Exception:
                 pass
@@ -253,7 +260,7 @@ def wait_for_project_page(page: Page, log_fn=print, timeout=20) -> bool:
 
 
 def enter_project(page: Page, log_fn=print) -> bool:
-    log_fn("   🏠 Trang chủ — tìm dự án...")
+    log_fn("   Finding Flow project...")
     time.sleep(2)
     js = """() => {
         const res = [];
@@ -265,14 +272,14 @@ def enter_project(page: Page, log_fn=print) -> bool:
     }"""
     try:
         urls = page.evaluate(js)
-        log_fn(f"   📂 Tìm thấy {len(urls)} dự án.")
+        log_fn(f"   Found {len(urls)} project URL(s).")
         if urls:
-            log_fn(f"   🔗 Vào: {urls[0][:80]}")
+            log_fn(f"   Opening project: {urls[0][:80]}")
             page.goto(urls[0], wait_until="domcontentloaded", timeout=20000)
             return wait_for_project_page(page, log_fn)
     except Exception as e:
-        log_fn(f"   ⚠️  JS scan lỗi: {e}")
-    log_fn("   ➕ Tạo dự án mới...")
+        log_fn(f"   WARN project scan failed: {e}")
+    log_fn("   Creating new project...")
     el, _ = find_el(page, NEW_PROJECT_SELECTORS, timeout=8000)
     if not el: return False
     el.click()
@@ -282,9 +289,9 @@ def enter_project(page: Page, log_fn=print) -> bool:
 def fill_prompt(page: Page, prompt: str, log_fn=print) -> bool:
     el, _ = find_el(page, PROMPT_SELECTORS, timeout=10000)
     if not el:
-        log_fn("   ❌ Không tìm thấy ô nhập!")
+        log_fn("   ERROR prompt input not found.")
         return False
-    log_fn("   ✍️  Đã gõ Prompt")
+    log_fn("   Prompt filled.")
     try:
         el.click(); time.sleep(0.3)
         page.keyboard.press("Control+a"); time.sleep(0.1)
@@ -292,17 +299,17 @@ def fill_prompt(page: Page, prompt: str, log_fn=print) -> bool:
         el.type(prompt, delay=30); time.sleep(0.5)
         return True
     except Exception as e:
-        log_fn(f"   ❌ fill error: {e}")
+        log_fn(f"   ERROR fill prompt failed: {e}")
         return False
 
 
 def click_submit(page: Page, log_fn=print) -> bool:
     el, _ = find_el(page, SUBMIT_SELECTORS, timeout=5000)
     if el:
-        log_fn("   🖱️  Click Submit: Đã tìm thấy nút Tạo")
+        log_fn("   Submit clicked.")
         el.click(force=True)
         return True
-    log_fn("   🖱️  JS fallback submit...")
+    log_fn("   Submit fallback via JS...")
     try:
         clicked = page.evaluate("""() => {
             const btns = [...document.querySelectorAll('button[type="submit"]')]
@@ -314,26 +321,536 @@ def click_submit(page: Page, log_fn=print) -> bool:
             return null;
         }""")
         if clicked:
-            log_fn(f"   🖱️  JS click: '{clicked[:30]}'"); return True
+            log_fn(f"   JS submit clicked: '{clicked[:30]}'"); return True
     except Exception as e:
-        log_fn(f"   ⚠️  JS submit error: {e}")
-    log_fn("   🖱️  Enter fallback")
+        log_fn(f"   WARN JS submit error: {e}")
+    log_fn("   Submit fallback via Enter.")
     page.keyboard.press("Enter")
     return True
 
 
+def normalize_ref_key(text: str) -> str:
+    text = unicodedata.normalize("NFKD", text or "")
+    text = "".join(ch for ch in text if not unicodedata.combining(ch))
+    text = text.lower()
+    text = re.sub(r"[^a-z0-9]+", "-", text)
+    return re.sub(r"-+", "-", text).strip("-")
+
+
+def list_reference_images(reference_dir: str) -> list[Path]:
+    if not reference_dir:
+        return []
+    root = Path(reference_dir)
+    if not root.exists() or not root.is_dir():
+        return []
+    return [
+        path
+        for path in root.iterdir()
+        if path.is_file() and path.suffix.lower() in IMAGE_EXTENSIONS
+    ]
+
+
+def resolve_reference_images(prompt: str, reference_dir: str, reference_mode: str, max_files: int = 10) -> list[str]:
+    images = list_reference_images(reference_dir)
+    if not images or reference_mode == "None":
+        return []
+
+    if reference_mode == "Use all images in folder":
+        return [str(path) for path in images[:max_files]]
+
+    prompt_key = normalize_ref_key(prompt)
+    prompt_compact = prompt_key.replace("-", "")
+    matched = []
+    for path in images:
+        stem_key = normalize_ref_key(path.stem)
+        stem_compact = stem_key.replace("-", "")
+        if stem_key and (
+            stem_key in prompt_key
+            or prompt_key in stem_key
+            or stem_compact in prompt_compact
+            or prompt_compact in stem_compact
+        ):
+            matched.append(str(path))
+
+    return matched[:max_files]
+
+
+def ref_cache_key(path: str) -> str:
+    try:
+        return str(Path(path).resolve()).lower()
+    except Exception:
+        return str(path).lower()
+
+
+def upload_reference_images(page: Page, image_paths: list[str], log_fn=print) -> bool:
+    valid_paths = [p for p in image_paths if p and os.path.exists(p)]
+    if not valid_paths:
+        return True
+
+    log_fn(f"   Upload reference: {len(valid_paths)} image(s)")
+
+    try:
+        file_input = page.locator('input[type="file"]').first
+        if file_input.count() > 0:
+            file_input.set_input_files(valid_paths)
+            time.sleep(2)
+            log_fn("   Reference uploaded via existing file input.")
+            return True
+    except Exception as e:
+            log_fn(f"   WARN existing file input upload failed: {e}")
+
+    upload_button_selectors = [
+        'button:has-text("Add image")',
+        'button:has-text("Upload")',
+        'button:has-text("Reference")',
+        'button:has-text("ThÃªm áº£nh")',
+        'button:has-text("Táº£i lÃªn")',
+        'button[aria-label*="image" i]',
+        'button[aria-label*="upload" i]',
+        'button[aria-label*="reference" i]',
+        'button:has(i:text-is("add_photo_alternate"))',
+        'button:has(i:text-is("image"))',
+        'button:has(i:text-is("attach_file"))',
+    ]
+
+    for selector in upload_button_selectors:
+        try:
+            button = page.locator(selector).first
+            if button.count() == 0:
+                continue
+            with page.expect_file_chooser(timeout=5000) as chooser_info:
+                button.click(force=True)
+            chooser_info.value.set_files(valid_paths)
+            time.sleep(2)
+            log_fn(f"   Reference uploaded via selector: {selector}")
+            return True
+        except Exception:
+            continue
+
+    try:
+        page.evaluate(
+            """() => {
+                const candidates = Array.from(document.querySelectorAll('button'))
+                  .filter(b => b.offsetParent !== null)
+                  .filter(b => {
+                    const txt = (b.innerText || b.textContent || b.getAttribute('aria-label') || '').toLowerCase();
+                    return txt.includes('image') || txt.includes('upload') || txt.includes('reference') ||
+                           txt.includes('áº£nh') || txt.includes('táº£i lÃªn');
+                  });
+                if (candidates[0]) {
+                  candidates[0].setAttribute('data-rx-upload-reference', 'true');
+                  return true;
+                }
+                return false;
+            }"""
+        )
+        with page.expect_file_chooser(timeout=5000) as chooser_info:
+            page.click('[data-rx-upload-reference="true"]', force=True)
+        chooser_info.value.set_files(valid_paths)
+        time.sleep(2)
+        log_fn("   Reference uploaded via fallback button.")
+        return True
+    except Exception as e:
+        log_fn(f"   WARN could not upload reference image(s): {e}")
+        return False
+
+
+def wait_for_upload_idle(page: Page, log_fn=print, timeout: int = 90) -> bool:
+    deadline = time.time() + timeout
+    last_state = None
+    while time.time() < deadline:
+        try:
+            state = page.evaluate(
+                """() => {
+                    const text = (document.body.innerText || '').toLowerCase();
+                    const pct = text.match(/\\b\\d{1,3}%\\b/);
+                    const busyWords = ['uploading', 'Ä‘ang táº£i', 'táº£i lÃªn', 'processing', 'Ä‘ang xá»­ lÃ½'];
+                    const busy = !!pct || busyWords.some(w => text.includes(w));
+                    return { busy, pct: pct ? pct[0] : '' };
+                }"""
+            )
+            current = state.get("pct") or ("busy" if state.get("busy") else "idle")
+            if current != last_state and state.get("busy"):
+                log_fn(f"   â³ Reference upload still processing: {current}")
+                last_state = current
+            if not state.get("busy"):
+                return True
+        except Exception:
+            return True
+        time.sleep(1.0)
+
+    log_fn("   âš ï¸ Reference upload wait timed out; trying to attach anyway.")
+    return False
+
+
+def open_reference_picker(page: Page, log_fn=print) -> bool:
+    try:
+        opened = page.evaluate(
+            """() => {
+                const visible = (el) => {
+                    if (!el) return false;
+                    const r = el.getBoundingClientRect();
+                    const s = window.getComputedStyle(el);
+                    return r.width > 0 && r.height > 0 && s.display !== 'none' && s.visibility !== 'hidden';
+                };
+                const textOf = (el) => (el.innerText || el.textContent || el.getAttribute('aria-label') || '').trim().toLowerCase();
+                const boxes = Array.from(document.querySelectorAll('textarea, [contenteditable="true"], [role="textbox"]')).filter(visible);
+                const promptBox = boxes[boxes.length - 1];
+                const promptRect = promptBox ? promptBox.getBoundingClientRect() : null;
+                const buttons = Array.from(document.querySelectorAll('button, [role="button"]')).filter(visible);
+                const candidates = buttons.filter((button) => {
+                    const rect = button.getBoundingClientRect();
+                    const text = textOf(button);
+                    const isPlus = text === '+' || text.includes('add') || text.includes('them') || text.includes('thêm');
+                    if (!isPlus) return false;
+                    if (!promptRect) return rect.top > window.innerHeight * 0.55;
+                    const nearPromptY = rect.top >= promptRect.top - 80 && rect.bottom <= promptRect.bottom + 80;
+                    return nearPromptY;
+                });
+                let target = null;
+                if (candidates.length) {
+                    const scored = candidates.map((button) => {
+                        const rect = button.getBoundingClientRect();
+                        const insideMedia = !!button.closest('img, video, [data-rx-reference-result]');
+                        const overlapsPromptInput = promptRect && rect.left >= promptRect.left && rect.right <= promptRect.right;
+                        const leftComposerAdd = promptRect && rect.right <= promptRect.left + 90;
+                        let score = 0;
+                        if (leftComposerAdd) score += 100;
+                        if (!insideMedia) score += 20;
+                        if (!overlapsPromptInput) score += 10;
+                        score -= Math.abs(rect.top - (promptRect ? promptRect.top : rect.top)) / 100;
+                        return { button, score, left: rect.left };
+                    });
+                    scored.sort((a, b) => b.score - a.score || a.left - b.left);
+                    target = scored[0].button;
+                }
+                target = target || buttons.reverse().find((button) => {
+                    const rect = button.getBoundingClientRect();
+                    const text = textOf(button);
+                    return rect.top > window.innerHeight * 0.65 && (text === '+' || text.includes('add') || text.includes('them') || text.includes('thêm'));
+                });
+                if (!target) return false;
+                target.setAttribute('data-rx-open-reference-picker', 'true');
+                return true;
+            }"""
+        )
+        if opened:
+            page.click('[data-rx-open-reference-picker="true"]', force=True)
+            time.sleep(0.8)
+            if get_reference_search_input(page) is not None:
+                return True
+    except Exception as e:
+        log_fn(f"   WARN could not open reference picker near prompt: {e}")
+
+    plus_selectors = [
+        'button:has-text("+")',
+        'button[aria-label*="add" i]',
+        'button[aria-label*="thÃªm" i]',
+        'button:has(i:text-is("add"))',
+        'button:has(i:text-is("add_circle"))',
+    ]
+
+    for selector in plus_selectors:
+        try:
+            candidates = page.locator(selector)
+            count = candidates.count()
+            for idx in range(min(count, 8)):
+                button = candidates.nth(count - 1 - idx)
+                if not button.is_visible():
+                    continue
+                button.click(force=True)
+                time.sleep(0.8)
+                if get_reference_search_input(page) is not None:
+                    return True
+        except Exception:
+            continue
+
+    try:
+        opened = page.evaluate(
+            """() => {
+                const buttons = Array.from(document.querySelectorAll('button')).filter(b => b.offsetParent !== null);
+                const target = buttons.reverse().find(b => {
+                    const txt = (b.innerText || b.textContent || b.getAttribute('aria-label') || '').trim().toLowerCase();
+                    return txt === '+' || txt.includes('add') || txt.includes('thÃªm');
+                });
+                if (!target) return false;
+                target.setAttribute('data-rx-open-reference-picker', 'true');
+                return true;
+            }"""
+        )
+        if opened:
+            page.click('[data-rx-open-reference-picker="true"]', force=True)
+            time.sleep(0.8)
+            return True
+    except Exception as e:
+        log_fn(f"   WARN could not open reference picker: {e}")
+
+    log_fn("   WARN could not open reference picker with plus button.")
+    return False
+
+
+def get_reference_search_input(page: Page):
+    try:
+        handle = page.evaluate_handle(
+            """() => {
+                const visible = (el) => {
+                    if (!el) return false;
+                    const r = el.getBoundingClientRect();
+                    const s = window.getComputedStyle(el);
+                    return r.width > 0 && r.height > 0 && s.display !== 'none' && s.visibility !== 'hidden';
+                };
+                const norm = (text) => (text || '').trim().toLowerCase();
+                const inputs = Array.from(document.querySelectorAll('input[type="search"], [role="searchbox"], input')).filter((el) => {
+                    return visible(el) && !el.disabled && !el.readOnly;
+                });
+                const pickerWords = ['tất cả', 'tat ca', 'hình ảnh', 'hinh anh', 'video', 'giọng nói', 'giong noi', 'tệp tải lên', 'tep tai len', 'thêm vào câu lệnh', 'them vao cau lenh', 'add to prompt'];
+                const scored = inputs.map((input, index) => {
+                    let node = input;
+                    let best = 0;
+                    for (let depth = 0; depth < 8 && node && node !== document.body; depth += 1) {
+                        const rect = node.getBoundingClientRect();
+                        const text = norm(node.innerText || node.textContent);
+                        const wordScore = pickerWords.reduce((sum, word) => sum + (text.includes(word) ? 1 : 0), 0);
+                        const modalLike = rect.width > 380 && rect.height > 260 && rect.top > 80 && rect.bottom < window.innerHeight - 20;
+                        const overlayLike = rect.width > 380 && rect.height > 260 && rect.left > 40 && rect.right < window.innerWidth - 40;
+                        const score = wordScore * 10 + (modalLike ? 3 : 0) + (overlayLike ? 2 : 0) + rect.top / 10000;
+                        if (score > best) best = score;
+                        node = node.parentElement;
+                    }
+                    return { input, index, best };
+                }).filter((item) => item.best >= 10);
+                scored.sort((a, b) => b.best - a.best || b.index - a.index);
+                return scored.length ? scored[0].input : null;
+            }"""
+        )
+        element = handle.as_element()
+        if element:
+            return element
+    except Exception:
+        pass
+
+    selectors = [
+        'input[type="search"]',
+        '[role="searchbox"]',
+        'input[placeholder*="search" i]',
+        'input[placeholder*="tìm" i]',
+        'input[placeholder*="tim" i]',
+        'input',
+    ]
+    for selector in selectors:
+        try:
+            locator = page.locator(selector)
+            count = locator.count()
+            for idx in range(min(count, 8)):
+                candidate = locator.nth(idx)
+                if candidate.is_visible() and candidate.is_enabled():
+                    return candidate
+        except Exception:
+            continue
+    return None
+
+
+def click_add_reference_to_prompt(page: Page, log_fn=print, timeout: int = 20) -> bool:
+    deadline = time.time() + timeout
+    selectors = [
+        'button:has-text("Thêm vào câu lệnh")',
+        '[role="button"]:has-text("Thêm vào câu lệnh")',
+        'button:has-text("Add to prompt")',
+        '[role="button"]:has-text("Add to prompt")',
+    ]
+
+    while time.time() < deadline:
+        for selector in selectors:
+            try:
+                button = page.locator(selector).first
+                if button.count() > 0 and button.is_visible() and button.is_enabled():
+                    button.click(force=True)
+                    time.sleep(0.8)
+                    return True
+            except Exception:
+                continue
+
+        try:
+            clicked = page.evaluate(
+                """() => {
+                    const nodes = Array.from(document.querySelectorAll('button, [role="button"], div, span'))
+                      .filter(el => el.offsetParent !== null);
+                    const target = nodes.find(el => {
+                        const txt = (el.innerText || el.textContent || '').trim().toLowerCase();
+                        if (!txt) return false;
+                        return txt === 'thêm vào câu lệnh' ||
+                               txt.includes('thêm vào câu lệnh') ||
+                               txt === 'add to prompt' ||
+                               txt.includes('add to prompt');
+                    });
+                    if (!target) return false;
+                    target.setAttribute('data-rx-add-reference-to-prompt', 'true');
+                    return true;
+                }"""
+            )
+            if clicked:
+                page.click('[data-rx-add-reference-to-prompt="true"]', force=True)
+                time.sleep(0.8)
+                return True
+        except Exception:
+            pass
+
+        time.sleep(0.5)
+
+    log_fn("   WARN add-to-prompt button not found after selecting reference.")
+    return False
+
+
+def attach_reference_with_extension(page: Page, image_path: str, log_fn=print, timeout_ms: int = 300000) -> bool | None:
+    basename = os.path.basename(image_path)
+    try:
+        helper_ready = page.evaluate("() => !!window.rxFlowHelper && typeof window.rxFlowHelper.attachReference === 'function'")
+    except Exception:
+        helper_ready = False
+
+    if not helper_ready:
+        log_fn("   RX Flow Helper extension is not available; using Playwright fallback.")
+        log_fn("   TIP Close the Chrome debug window and rerun Tool 8 once to load the extension.")
+        return None
+
+    log_fn(f"   RX Flow Helper attaching reference: {basename}")
+    try:
+        result = page.evaluate(
+            """async ({ filename, timeoutMs }) => {
+                return await window.rxFlowHelper.attachReference(filename, { timeoutMs });
+            }""",
+            {"filename": basename, "timeoutMs": timeout_ms},
+        )
+    except Exception as exc:
+        log_fn(f"   WARN RX Flow Helper attach failed: {exc}")
+        return False
+
+    if result and result.get("ok"):
+        log_fn(f"   OK RX Flow Helper attached reference: {basename}")
+        return True
+
+    log_fn(f"   WARN RX Flow Helper could not attach reference: {result}")
+    return False
+
+
+def attach_reference_image_to_prompt(page: Page, image_path: str, log_fn=print, timeout: int = 300) -> bool:
+    extension_result = attach_reference_with_extension(page, image_path, log_fn, timeout * 1000)
+    if extension_result is not None:
+        return extension_result
+
+    basename = os.path.basename(image_path)
+    stem = os.path.splitext(basename)[0]
+    selected = False
+    deadline = time.time() + timeout
+    attempt = 0
+    queries = (stem, basename)
+    search_input = None
+
+    while time.time() < deadline and not selected:
+        if attempt == 0 or attempt % 12 == 0:
+            try:
+                page.keyboard.press("Escape")
+                time.sleep(0.5)
+            except Exception:
+                pass
+            if not open_reference_picker(page, log_fn):
+                time.sleep(2.0)
+                attempt += 1
+                continue
+            search_input = get_reference_search_input(page)
+            if search_input is None:
+                log_fn("   WARN Reference picker opened but search input was not found.")
+                time.sleep(2.0)
+                attempt += 1
+                continue
+
+        query = queries[attempt % len(queries)]
+        attempt += 1
+        try:
+            search_input.click()
+            page.keyboard.press("Control+a")
+            page.keyboard.press("Backspace")
+            search_input.fill(query)
+            time.sleep(1.0)
+
+            found = page.evaluate(
+                """(q) => {
+                    const ql = q.toLowerCase();
+                    const nodes = Array.from(document.querySelectorAll('[role="option"], [role="listitem"], button, div'))
+                      .filter(el => el.offsetParent !== null);
+                    const target = nodes.find(el => {
+                        const txt = (el.innerText || el.textContent || '').toLowerCase();
+                        const stillUploading =
+                            /\\b\\d{1,3}%\\b/.test(txt) ||
+                            txt.includes('uploading') ||
+                            txt.includes('dang tai') ||
+                            txt.includes('đang tải') ||
+                            txt.includes('tai len') ||
+                            txt.includes('tải lên');
+                        if (stillUploading) return false;
+                        const textMatches = txt.includes(ql) && (
+                            txt.includes('hinh') || txt.includes('hình') || txt.includes('image') ||
+                            txt.includes('.png') || txt.includes('.jpg') ||
+                            txt.includes('.jpeg') || txt.includes('.webp')
+                        );
+                        if (!textMatches) return false;
+                        const imgs = Array.from(el.querySelectorAll('img'));
+                        const hasLoadedThumb = imgs.some(img => {
+                            const style = window.getComputedStyle(img);
+                            const src = img.currentSrc || img.src || '';
+                            return src &&
+                                !src.startsWith('data:image/svg') &&
+                                !src.includes('.svg') &&
+                                (img.naturalWidth > 40 || img.width > 40) &&
+                                (img.naturalHeight > 40 || img.height > 40) &&
+                                parseFloat(style.opacity || '1') > 0.5 &&
+                                !style.filter.includes('blur');
+                        });
+                        return hasLoadedThumb;
+                    });
+                    if (!target) return false;
+                    target.setAttribute('data-rx-reference-result', 'true');
+                    return true;
+                }""",
+                query,
+            )
+            if found:
+                page.click('[data-rx-reference-result="true"]', force=True)
+                time.sleep(0.6)
+                selected = True
+                break
+            if attempt == 1 or attempt % 20 == 0:
+                log_fn(f"   WAIT reference asset not ready yet: {basename}")
+        except Exception:
+            time.sleep(1.0)
+
+    if not selected:
+        log_fn(f"   WARN Reference asset not found in picker: {basename}")
+        try:
+            page.keyboard.press("Escape")
+        except Exception:
+            pass
+        return False
+
+    if click_add_reference_to_prompt(page, log_fn):
+        log_fn(f"   OK Attached reference to prompt: {basename}")
+        return True
+
+    log_fn(f"   WARN Add-to-prompt failed for reference: {basename}")
+    return False
+
 def setup_flow_options(page: Page, expected_images: int, aspect_ratio: str, model: str,
                        output_type: str, seed: str = None, log_fn=print):
-    log_fn(f"   ⚙️ Thiết lập: {output_type} | {expected_images} ảnh | {aspect_ratio} | {model} | Seed: {seed or 'Auto'}")
+    log_fn(f"   Settings: {output_type} | {expected_images} images | {aspect_ratio} | {model} | Seed: {seed or 'Auto'}")
     target_count = str(expected_images)
     ratio_map = {
-        "16:9 Ngang": "16:9", "9:16 Dọc": "9:16", "1:1 Vuông": "1:1", "4:3": "4:3", "3:4": "3:4",
+        "16:9 Ngang": "16:9", "9:16 Dá»c": "9:16", "1:1 VuÃ´ng": "1:1", "4:3": "4:3", "3:4": "3:4",
     }
     web_ratio = ratio_map.get(aspect_ratio, aspect_ratio)
 
     try:
-        # Bước 1: Tìm và Click nút Settings bằng Playwright Native Click
-        # Tìm nút có text chứa thông tin model/crop và gán cho nó 1 ID tạm thời để Playwright click chính xác
+        # BÆ°á»›c 1: TÃ¬m vÃ  Click nÃºt Settings báº±ng Playwright Native Click
+        # TÃ¬m nÃºt cÃ³ text chá»©a thÃ´ng tin model/crop vÃ  gÃ¡n cho nÃ³ 1 ID táº¡m thá»i Ä‘á»ƒ Playwright click chÃ­nh xÃ¡c
         btn_info = page.evaluate(r"""() => {
             const btns = Array.from(document.querySelectorAll('button')).filter(b => b.offsetParent !== null);
             let target = btns.find(b => {
@@ -352,18 +869,18 @@ def setup_flow_options(page: Page, expected_images: int, aspect_ratio: str, mode
         }""")
 
         if btn_info:
-            # Thực hiện click thật (Native Click) - tin cậy hơn JS click
+            # Thá»±c hiá»‡n click tháº­t (Native Click) - tin cáº­y hÆ¡n JS click
             page.click('[data-qa-settings-trigger="true"]', delay=100)
-            log_fn(f"   🖱️ Đã click nút Settings: '{btn_info[:40]}...'")
+            log_fn(f"   Opened settings: '{btn_info[:40]}...'")
             
-            # Kiểm tra xem panel đã mở chưa (thường là div có role menu hoặc data-state open)
+            # Kiá»ƒm tra xem panel Ä‘Ã£ má»Ÿ chÆ°a (thÆ°á»ng lÃ  div cÃ³ role menu hoáº·c data-state open)
             panel_opened = False
             for _ in range(5):
                 time.sleep(0.5)
                 panel_opened = page.evaluate("""() => {
                     const panel = document.querySelector('div[role="menu"][data-state="open"], div[data-test-id="settings-panel"]');
                     if (panel) {
-                        // Đảm bảo panel đang hiển thị
+                        // Äáº£m báº£o panel Ä‘ang hiá»ƒn thá»‹
                         const style = window.getComputedStyle(panel);
                         return style.display !== 'none' && style.visibility !== 'hidden';
                     }
@@ -372,13 +889,13 @@ def setup_flow_options(page: Page, expected_images: int, aspect_ratio: str, mode
                 if panel_opened: break
             
             if not panel_opened:
-                log_fn("   ⚠️ Đã click nhưng Panel Settings vẫn chưa xuất hiện."); return
+                log_fn("   WARN settings panel did not open."); return
             else:
-                log_fn("   ✅ Panel Settings đã hiển thị.")
+                log_fn("   Settings panel is visible.")
         else:
-            log_fn("   ⚠️ Không tìm thấy nút Settings nào trên giao diện."); return
+            log_fn("   WARN settings button not found."); return
 
-        # Bước 2: Loại output
+        # BÆ°á»›c 2: Loáº¡i output
         if output_type:
             output_status = page.evaluate("""(t) => {
                 const panel = document.querySelector('div[role="menu"][data-state="open"]');
@@ -394,13 +911,13 @@ def setup_flow_options(page: Page, expected_images: int, aspect_ratio: str, mode
             
             if output_status == 'needs_click':
                 page.click('[data-qa-output-trigger="true"]', delay=100)
-                log_fn(f"   ✅ Đã click chọn output: {output_type}"); time.sleep(0.4)
+                log_fn(f"   Output selected: {output_type}"); time.sleep(0.4)
             elif output_status == 'already_selected':
-                log_fn(f"   ⏩ Bỏ qua output (đang ở sẵn: {output_type})")
+                log_fn(f"   Output already selected: {output_type}")
             else:
-                log_fn(f"   ⚠️ Không tìm thấy nút output: {output_type}")
+                log_fn(f"   WARN output option not found: {output_type}")
 
-        # Bước 3: Tỷ lệ (Ratio) - Native Click
+        # BÆ°á»›c 3: Tá»· lá»‡ (Ratio) - Native Click
         ratio_status = page.evaluate("""(ratio) => {
             const panel = document.querySelector('div[role="menu"][data-state="open"]');
             if (!panel) return 'not_found';
@@ -414,13 +931,13 @@ def setup_flow_options(page: Page, expected_images: int, aspect_ratio: str, mode
         
         if ratio_status == 'needs_click':
             page.click('[data-qa-ratio-trigger="true"]', delay=100)
-            log_fn(f"   ✅ Đã click chọn tỷ lệ: {web_ratio}"); time.sleep(0.4)
+            log_fn(f"   Aspect ratio selected: {web_ratio}"); time.sleep(0.4)
         elif ratio_status == 'already_selected':
-            log_fn(f"   ⏩ Bỏ qua tỷ lệ (đang ở sẵn: {web_ratio})")
+            log_fn(f"   Aspect ratio already selected: {web_ratio}")
         else:
-            log_fn(f"   ⚠️ Không tìm thấy nút tỷ lệ: {web_ratio}")
+            log_fn(f"   WARN aspect ratio option not found: {web_ratio}")
 
-        # Bước 4: Số lượng (Quantity) - Native Click
+        # BÆ°á»›c 4: Sá»‘ lÆ°á»£ng (Quantity) - Native Click
         count_status = page.evaluate("""(cnt) => {
             const panel = document.querySelector('div[role="menu"][data-state="open"]');
             if (!panel) return 'not_found';
@@ -439,13 +956,13 @@ def setup_flow_options(page: Page, expected_images: int, aspect_ratio: str, mode
         
         if count_status == 'needs_click':
             page.click('[data-qa-qty-trigger="true"]', delay=100)
-            log_fn(f"   ✅ Đã click chọn số lượng: {target_count}"); time.sleep(0.4)
+            log_fn(f"   Image count selected: {target_count}"); time.sleep(0.4)
         elif count_status == 'already_selected':
-            log_fn(f"   ⏩ Bỏ qua số lượng (đang ở sẵn: {target_count})")
+            log_fn(f"   Image count already selected: {target_count}")
         else:
-            log_fn(f"   ⚠️ Không tìm thấy nút số lượng: {target_count}")
+            log_fn(f"   WARN image count option not found: {target_count}")
 
-        # Bước 5: Model dropdown bên trong panel
+        # BÆ°á»›c 5: Model dropdown bÃªn trong panel
         if model:
             model_status = page.evaluate("""(modelName) => {
                 const panel = document.querySelector('div[role="menu"][data-state="open"]');
@@ -457,7 +974,7 @@ def setup_flow_options(page: Page, expected_images: int, aspect_ratio: str, mode
                     (b.textContent && (b.textContent.includes('Banana') || b.textContent.includes('Imagen')))
                 );
                 if (dropBtn) {
-                    // Nếu text của nút đã hiển thị đúng model đang chọn thì bỏ qua
+                    // Náº¿u text cá»§a nÃºt Ä‘Ã£ hiá»ƒn thá»‹ Ä‘Ãºng model Ä‘ang chá»n thÃ¬ bá» qua
                     if (dropBtn.textContent.includes(modelName)) return 'already_selected';
                     
                     dropBtn.setAttribute('data-qa-model-dropdown', 'true');
@@ -467,17 +984,17 @@ def setup_flow_options(page: Page, expected_images: int, aspect_ratio: str, mode
             }""", model)
 
             if model_status == 'already_selected':
-                log_fn(f"   ⏩ Bỏ qua model (đang ở sẵn: {model})")
+                log_fn(f"   Model already selected: {model}")
             elif model_status == 'needs_click':
                 page.click('[data-qa-model-dropdown="true"]', delay=100)
-                log_fn("   🖱️ Đã click mở dropdown Model.")
-                time.sleep(1.0) # Đợi animation mở popup
+                log_fn("   ðŸ–±ï¸ ÄÃ£ click má»Ÿ dropdown Model.")
+                time.sleep(1.0) # Äá»£i animation má»Ÿ popup
                 
                 model_found = page.evaluate("""(modelName) => {
                     const panels = Array.from(document.querySelectorAll('[role="menu"][data-state="open"], [role="dialog"], [role="listbox"]'));
                     const lastPanel = panels.length > 0 ? panels[panels.length - 1] : document;
                     const opts = Array.from(lastPanel.querySelectorAll('[role="menuitem"], [role="option"]'))
-                        .filter(b => b.offsetParent !== null && b.checkVisibility()); // Chỉ lấy phần tử đang hiển thị
+                        .filter(b => b.offsetParent !== null && b.checkVisibility()); // Chá»‰ láº¥y pháº§n tá»­ Ä‘ang hiá»ƒn thá»‹
                     
                     const target = opts.find(el => (el.innerText || el.textContent || '').trim().includes(modelName));
                     if (target) {
@@ -488,17 +1005,17 @@ def setup_flow_options(page: Page, expected_images: int, aspect_ratio: str, mode
                 }""", model)
                 if model_found:
                     page.click('[data-qa-model-trigger="true"]', delay=100)
-                    log_fn(f"   ✅ Đã click chọn model: {model}")
+                    log_fn(f"   Model selected: {model}")
                 else:
-                    log_fn(f"   ⚠️ Không click được model: {model}")
+                    log_fn(f"   WARN model option not clickable: {model}")
                 time.sleep(0.5)
             else:
-                log_fn("   ⚠️ Không tìm thấy dropdown model bên trong panel.")
+                log_fn("   WARN model dropdown not found.")
 
         page.keyboard.press("Escape"); time.sleep(0.5)
 
     except Exception as e:
-        log_fn(f"   ⚠️ Lỗi setup_flow_options: {e}")
+        log_fn(f"   âš ï¸ Lá»—i setup_flow_options: {e}")
         try: page.keyboard.press("Escape")
         except: pass
 
@@ -507,16 +1024,16 @@ def setup_flow_options(page: Page, expected_images: int, aspect_ratio: str, mode
             inp = page.locator('input[placeholder*="Seed"], input[aria-label*="Seed"]').first
             if inp.count() > 0:
                 inp.fill(seed.strip())
-                log_fn(f"   🔢 Đã khóa Seed: {seed}")
+                log_fn(f"   ðŸ”¢ ÄÃ£ khÃ³a Seed: {seed}")
         except Exception as e:
-            log_fn(f"   ⚠️ Lỗi Seed: {e}")
+            log_fn(f"   âš ï¸ Lá»—i Seed: {e}")
 
 
 def get_all_images(page: Page, log_fn=None) -> list[dict]:
     try:
         return page.evaluate(IMAGE_SCAN_JS) or []
     except Exception as e:
-        if log_fn: log_fn(f"   ⚠️  scan images error: {e}")
+        if log_fn: log_fn(f"   âš ï¸  scan images error: {e}")
         return []
 
 
@@ -550,20 +1067,20 @@ def save_one_media(img_info: dict, page: Page, save_dir: str,
             data = base64.b64decode(b64)
             if len(data) > 10000:
                 Path(fpath).write_bytes(data)
-                log_fn(f"   💾 Lưu: {os.path.basename(fpath)} ({len(data)//1024}KB)")
+                log_fn(f"   ðŸ’¾ LÆ°u: {os.path.basename(fpath)} ({len(data)//1024}KB)")
                 return fpath
             else:
-                log_fn(f"   ⚠️ Bỏ qua ảnh lỗi ({len(data)} bytes)")
+                log_fn(f"   âš ï¸ Bá» qua áº£nh lá»—i ({len(data)} bytes)")
     except Exception as e:
-        log_fn(f"   ⚠️ Lỗi lưu ảnh {idx}: {e}")
+        log_fn(f"   âš ï¸ Lá»—i lÆ°u áº£nh {idx}: {e}")
     return None
 
 
-# ──────────────────────────────────────────────────────
-# ENGINE CHÍNH — v7
-# Dùng before_urls để phân biệt ảnh mới (không dùng row index)
-# isBlocked chỉ xét trên row CÓ CHỨA ảnh mới
-# ──────────────────────────────────────────────────────
+# â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+# ENGINE CHÃNH â€” v7
+# DÃ¹ng before_urls Ä‘á»ƒ phÃ¢n biá»‡t áº£nh má»›i (khÃ´ng dÃ¹ng row index)
+# isBlocked chá»‰ xÃ©t trÃªn row CÃ“ CHá»¨A áº£nh má»›i
+# â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 def run_auto(
     prompts: list[str],
@@ -578,12 +1095,16 @@ def run_auto(
     expected_images: int = 2,
     aspect_ratio: str = "16:9",
     model: str = "Nano Banana 2",
-    output_type: str = "Hình ảnh",
+    output_type: str = "HÃ¬nh áº£nh",
     task_name: str = None,
-    seed: str = None
+    seed: str = None,
+    reference_mode: str = "None",
+    reference_dir: str = None,
+    manual_reference_paths: list[list[str]] = None
 ) -> list[str]:
     saved = []
-    log_fn("\n🚀 G-Labs Engine v7...")
+    uploaded_reference_keys = set()
+    log_fn("\nG-Labs Engine v7")
 
     try:
         if not ensure_chrome_running(log_fn): return []
@@ -601,7 +1122,7 @@ def run_auto(
                     page = ep
                     try: page.bring_to_front()
                     except: pass
-                    log_fn("   🔄 Sử dụng lại tab Google Labs đã mở.")
+                    log_fn("   Reusing existing Google Labs tab.")
                     break
 
             if not page:
@@ -614,34 +1135,34 @@ def run_auto(
                     page.goto(FLOW_URL, wait_until="domcontentloaded", timeout=30000)
                     time.sleep(2)
                 if not enter_project(page, log_fn):
-                    log_fn("❌ Không xác định được dự án."); return []
+                    log_fn("ERROR could not enter a Flow project."); return []
             else:
-                log_fn("   ✅ Tab đang ở sẵn trong dự án.")
+                log_fn("   Existing tab is already in a project.")
 
-            log_fn(f"🔗 URL Dự án: {page.url}")
+            log_fn(f"Project URL: {page.url}")
             time.sleep(2)
 
             setup_flow_options(page, expected_images, aspect_ratio, model, output_type, seed, log_fn)
 
-            # Quét toàn bộ lịch sử ảnh (từ đầu tới chân)
-            log_fn("   🔍 Đang cuộn ngược để quét TOÀN BỘ ảnh cũ trong dự án...")
+            # QuÃ©t toÃ n bá»™ lá»‹ch sá»­ áº£nh (tá»« Ä‘áº§u tá»›i chÃ¢n)
+            log_fn("   Scanning existing project media...")
             all_existing_urls = set()
             unchanged_count = 0
             
-            for _ in range(50):  # Cuộn tối đa 50 lần
+            for _ in range(50):  # Cuá»™n tá»‘i Ä‘a 50 láº§n
                 current_urls = set(page.evaluate(GET_ALL_URLS_JS))
                 prev_total = len(all_existing_urls)
                 all_existing_urls.update(current_urls)
                 
                 if len(all_existing_urls) > prev_total:
                     unchanged_count = 0
-                    log_fn(f"      ...đã quét được {len(all_existing_urls)} ảnh/video")
+                    log_fn(f"      scanned {len(all_existing_urls)} existing media URL(s)")
                 else:
                     unchanged_count += 1
-                    if unchanged_count >= 3:  # Dừng nếu 3 lần cuộn không có ảnh mới
+                    if unchanged_count >= 3:  # Dá»«ng náº¿u 3 láº§n cuá»™n khÃ´ng cÃ³ áº£nh má»›i
                         break
                         
-                # Lệnh JS để tìm phần tử cuộn và đẩy lên trên
+                # Lá»‡nh JS Ä‘á»ƒ tÃ¬m pháº§n tá»­ cuá»™n vÃ  Ä‘áº©y lÃªn trÃªn
                 page.evaluate("""() => {
                     const articles = document.querySelectorAll('div[role="article"], div[data-testid="virtuoso-item-list"] > div[data-index]');
                     if (articles.length > 0) {
@@ -653,31 +1174,31 @@ def run_auto(
                 time.sleep(1.0)
                 
             existing_urls = all_existing_urls
-            log_fn(f"   📊 [DEBUG] Quét hoàn tất! Tổng số ảnh/video cũ trong dự án là: {len(existing_urls)}.")
+            log_fn(f"   Scan complete. Existing media URL(s): {len(existing_urls)}")
             
-            # Trả lại vị trí cuộn xuống dưới cùng để chuẩn bị gõ prompt
+            # Tráº£ láº¡i vá»‹ trÃ­ cuá»™n xuá»‘ng dÆ°á»›i cÃ¹ng Ä‘á»ƒ chuáº©n bá»‹ gÃµ prompt
             page.evaluate("""() => {
                 const articles = document.querySelectorAll('div[role="article"], div[data-testid="virtuoso-item-list"] > div[data-index]');
                 if (articles.length > 0) articles[articles.length - 1].scrollIntoView();
             }""")
             time.sleep(1.0)
             
-            # Debug kiểm tra cấu trúc Row theo Element mới
-            log_fn("   🔍 Đang phân tích cấu trúc các lượt tạo ảnh (Rows)...")
+            # Debug kiá»ƒm tra cáº¥u trÃºc Row theo Element má»›i
+            log_fn("   Reading existing generation rows...")
             current_rows = page.evaluate(IMAGE_SCAN_JS)
-            log_fn(f"   📝 [DEBUG] Tìm thấy {len(current_rows)} lượt tạo ảnh (Rows):")
+            log_fn(f"   Existing generation row(s): {len(current_rows)}")
             for r in current_rows:
                 blocked = r.get('blockedCount', 0)
-                blocked_str = f" | 🚫 Bị chặn (Policy): {blocked}" if blocked > 0 else ""
-                log_fn(f"      - Row {r.get('rowIndex')} [Prompt: '{r.get('promptText')}']: chứa {r.get('count')} ảnh{blocked_str} | Đang load: {r.get('isBusy')}")
+                blocked_str = f" | blocked: {blocked}" if blocked > 0 else ""
+                log_fn(f"      - Row {r.get('rowIndex')} [Prompt: '{r.get('promptText')}']: media={r.get('count')}{blocked_str} | busy={r.get('isBusy')}")
 
-            # Quét và log ô nhập Prompt
-            log_fn("   🔍 Đang quét ô nhập Prompt...")
+            # QuÃ©t vÃ  log Ã´ nháº­p Prompt
+            log_fn("   Scanning prompt input fields...")
             prompt_elements = page.evaluate("""() => {
                 const els = Array.from(document.querySelectorAll('textarea, [contenteditable="true"], [role="textbox"]'));
                 return els.map(e => `${e.tagName.toLowerCase()} (placeholder: "${e.getAttribute('placeholder') || ''}", role: "${e.getAttribute('role') || ''}")`);
             }""")
-            log_fn(f"   📝 [DEBUG] Tìm thấy {len(prompt_elements)} ô nhập liệu tiềm năng:")
+            log_fn(f"   Prompt input candidate(s): {len(prompt_elements)}")
             for el in prompt_elements:
                 log_fn(f"      - {el}")
 
@@ -687,17 +1208,41 @@ def run_auto(
             for done, prompt in enumerate(valid_prompts, 1):
                 if stop_fn and stop_fn(): break
 
-                log_fn(f"\n{'━'*50}")
-                log_fn(f"▶  [{done}/{total}] {prompt[:70]}")
+                log_fn(f"\n{'-'*50}")
+                log_fn(f"> [{done}/{total}] {prompt[:70]}")
                 if on_gen_start: on_gen_start(done - 1, prompt)
 
-                # Snapshot trước khi submit
-                before_urls = set(page.evaluate(GET_ALL_URLS_JS))
+                # Snapshot trÆ°á»›c khi submit
+                manual_refs = manual_reference_paths[done - 1] if manual_reference_paths and done - 1 < len(manual_reference_paths) else []
+                ref_paths = manual_refs or resolve_reference_images(prompt, reference_dir, reference_mode)
+                if ref_paths:
+                    log_fn("   Matched reference: " + ", ".join(os.path.basename(p) for p in ref_paths))
+                    upload_needed = [p for p in ref_paths if ref_cache_key(p) not in uploaded_reference_keys]
+                    if upload_needed:
+                        for upload_path in upload_needed:
+                            if upload_reference_images(page, [upload_path], log_fn):
+                                uploaded_reference_keys.add(ref_cache_key(upload_path))
+                            else:
+                                log_fn(f"   WARN Reference upload failed: {os.path.basename(upload_path)}")
+                    else:
+                        log_fn("   Reference already uploaded in this batch; reusing library asset.")
+                elif reference_mode != "None" and reference_dir:
+                    log_fn("   No matching reference image for this prompt.")
 
                 if not fill_prompt(page, prompt, log_fn): continue
+                attach_ok = True
+                for ref_path in ref_paths:
+                    if not attach_reference_image_to_prompt(page, ref_path, log_fn):
+                        attach_ok = False
+                if ref_paths and not attach_ok:
+                    log_fn("   WARN Reference attach failed; skipping prompt to avoid generating without reference.")
+                    continue
+
+                before_urls = set(page.evaluate(GET_ALL_URLS_JS))
+
                 if not click_submit(page, log_fn): continue
 
-                log_fn("   ⏳ Đang đợi Google sinh ảnh...")
+                log_fn("   Waiting for Google to generate images...")
 
                 new_images         = []
                 timeout_at         = time.time() + GEN_TIMEOUT
@@ -716,16 +1261,16 @@ def run_auto(
                     for r in all_rows:
                         row_prompt = r.get('promptText', 'Unknown Prompt')
                         
-                        # [FIX] Lọc chéo: Bỏ qua các row của prompt cũ đang render ngầm (ví dụ "gojo")
+                        # [FIX] Lá»c chÃ©o: Bá» qua cÃ¡c row cá»§a prompt cÅ© Ä‘ang render ngáº§m (vÃ­ dá»¥ "gojo")
                         if row_prompt != "Unknown Prompt":
                             rp_clean = re.sub(r'\s+', ' ', row_prompt.strip().lower())
                             curr_clean = re.sub(r'\s+', ' ', prompt.strip().lower())
-                            # Nếu text không khớp, bỏ qua row này hoàn toàn
+                            # Náº¿u text khÃ´ng khá»›p, bá» qua row nÃ y hoÃ n toÃ n
                             if rp_clean != curr_clean and not rp_clean.startswith(curr_clean) and not curr_clean.startswith(rp_clean):
                                 continue
 
                         row_imgs = r.get('images', [])
-                        # Row này có chứa ảnh mới không?
+                        # Row nÃ y cÃ³ chá»©a áº£nh má»›i khÃ´ng?
                         row_has_new = any(img['src'] not in before_urls for img in row_imgs)
                         row_in_progress = r.get('isBusy') or r.get('progress', 0) > 0
 
@@ -742,26 +1287,26 @@ def run_auto(
                             if img.get('isReadyRelaxed'): relaxed_ready.append(img)
 
                     if max_prog != last_logged_prog:
-                        log_fn(f"   ⏳ Đang render... {max_prog}%")
+                        log_fn(f"   Rendering... {max_prog}%")
                         last_logged_prog = max_prog
                         last_change_time = time.time()
 
                     if on_gen_progress: on_gen_progress(done - 1, max_prog)
 
-                    # Thoát khi đủ ảnh hoặc đạt 100%
+                    # ThoÃ¡t khi Ä‘á»§ áº£nh hoáº·c Ä‘áº¡t 100%
                     total_resolved = len(strict_ready) + total_blocked
                     if total_resolved >= expected_images:
                         new_images = strict_ready; break
                     if (max_prog >= 100) and not any_busy and (len(relaxed_ready) + total_blocked > 0):
                         new_images = strict_ready if strict_ready else relaxed_ready; break
                     
-                    # Kẹt lâu quá thì lấy ảnh hiện có
+                    # Káº¹t lÃ¢u quÃ¡ thÃ¬ láº¥y áº£nh hiá»‡n cÃ³
                     if (time.time() - last_change_time) > STABLE_WAIT and (len(relaxed_ready) + total_blocked > 0):
                         new_images = relaxed_ready; break
 
                     time.sleep(1)
 
-                # Fallback lần cuối
+                # Fallback láº§n cuá»‘i
                 if not new_images:
                     final_rows = page.evaluate(IMAGE_SCAN_JS)
                     for r in final_rows:
@@ -776,7 +1321,7 @@ def run_auto(
                             if img['src'] not in before_urls and img.get('isReadyRelaxed')
                         ])
 
-                # Lưu ảnh
+                # LÆ°u áº£nh
                 for i, img in enumerate(new_images):
                     fp = save_one_media(img, page, final_save_dir, prompt, i + 1, log_fn)
                     if fp:
@@ -785,10 +1330,12 @@ def run_auto(
 
                 if done < total: time.sleep(BETWEEN_DELAY)
 
-            log_fn(f"\n🎉 HOÀN THÀNH! Đã lưu {len(saved)} ảnh mới.")
+            log_fn(f"\nDONE. Saved {len(saved)} new image(s).")
 
     except Exception as e:
-        log_fn(f"\n❌ LỖI: {e}")
-        log_fn("💡 Chrome cần --remote-debugging-port=9222")
+        log_fn(f"\nERROR: {e}")
+        log_fn("Chrome must be running with --remote-debugging-port=9222")
 
     return saved
+
+

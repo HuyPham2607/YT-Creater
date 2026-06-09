@@ -1,0 +1,21 @@
+{
+  "manifest_version": 3,
+  "name": "RX Flow Helper",
+  "version": "0.1.1",
+  "description": "Local helper for RX Tool 8 to inspect and operate Google Flow UI.",
+  "permissions": [],
+  "host_permissions": [
+    "https://labs.google/*"
+  ],
+  "content_scripts": [
+    {
+      "matches": [
+        "https://labs.google/*"
+      ],
+      "js": [
+        "content.js"
+      ],
+      "run_at": "document_idle"
+    }
+  ]
+}

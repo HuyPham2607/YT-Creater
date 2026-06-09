@@ -52,13 +52,14 @@ RULES:
 5. Keep every non-clothing attribute from charStyle unchanged
    (outline weight, shading technique, skin tone, proportions, eye style, etc.)
 6. Never include readable text, logo, brand mark, celebrity likeness, or copyrighted character likeness.
-7. End EXACTLY with:
+7. Do not include any palette strip, color swatches, sample color boxes, labels, captions, UI elements, or design-system blocks.
+8. End EXACTLY with:
    "Professional white background, TOP ROW 4 full-body views front 45-degree side back,
-   BOTTOM ROW 6 expression close-ups."
-8. Output ONLY the prompt string. No JSON, no explanation, no markdown."""
+   BOTTOM ROW 6 expression close-ups, clean sheet layout, no color palette strip, no swatches, no labels, no text."
+9. Output ONLY the prompt string. No JSON, no explanation, no markdown."""
 
 BG_SYSTEM = """You are an expert AI image prompt engineer.
-Generate a single background reference sheet prompt.
+Generate a single background variation sheet prompt.
 
 RULES:
 1. Start with the sceneStyle verbatim as the aesthetic anchor.
@@ -72,9 +73,13 @@ RULES:
    - Do not use writing/tone/title rules unless they imply a visible design constraint.
 5. Keep atmosphere and lighting style from bgStyle (single directional source, shadow zones, etc.)
 6. Never include readable text, logo, brand mark, celebrity likeness, or copyrighted character likeness.
-7. End EXACTLY with:
-   "NO characters NO people NO text NO words, 16:9."
-8. Output ONLY the prompt string. No JSON, no explanation, no markdown."""
+7. The output image must be a 2x2 contact sheet with four distinct 16:9 background options for the same location asset.
+   - Each quadrant must show the same location identity but a different usable camera angle or sub-area.
+   - Include useful production options such as wide establishing view, medium interior view, close detail/corner view, and alternate lighting or entrance/exterior view when appropriate.
+   - Keep all four options empty and reusable as backgrounds, with no people and no character silhouettes.
+8. End EXACTLY with:
+   "2x2 contact sheet, four separate 16:9 background options for the same location, thin white gutters between panels, NO characters NO people NO readable text NO words NO logos."
+9. Output ONLY the prompt string. No JSON, no explanation, no markdown."""
 
 
 # ──────────────────────────────────────────────

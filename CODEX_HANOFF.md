@@ -1,77 +1,49 @@
-﻿# CODEX HANDOFF - RX Tools / YT-Creater
+# CODEX HANDOFF - Tool 8 G-Labs
 
-Repo dang lam viec: `C:\newapp`
+Ngay 2026-06-09 da tap trung sua Tool 8 G-Labs/Flow automation.
 
-## Da Lam Trong Phien Nay
+## Da lam duoc
 
-### Gemini retry/backoff
-- Them `threads/gemini_retry.py`.
-- Cac worker chinh da dung retry/fallback model khi gap `429`, `503`, timeout, `WinError 10054`, high demand.
-- File lien quan: `threads/topic_worker.py`, `threads/research_worker.py`, `threads/script_worker.py`, `threads/scene_worker.py`, `threads/asset_prompt_worker.py`.
+- Viet lai UI Tool 8 theo dang queue/table de nhin ro tung dong prompt.
+- Moi dong co cot: Reference, Prompt, Settings, Output, Status.
+- Cot Reference hien 5 slot anh co dinh.
+- Bam `+` de them anh reference vao slot trong, khong ghi de anh cu nua.
+- Moi row luu duoc danh sach nhieu anh reference.
+- Engine upload tung anh reference rieng le, khong gop contact sheet nua.
+- Anh da upload trong cung batch se duoc cache, prompt sau dung lai thi chi search/add tu library, khong upload lai.
+- Da fix luong reference:
+  - upload anh len Flow
+  - doi anh xuat hien trong asset picker
+  - search dung trong bang asset/reference, khong search nham thanh search ngoai
+  - click anh
+  - bam `Them vao cau lenh`
+  - chi submit khi reference attach thanh cong
+- Tao extension local `extensions/rx-flow-helper` de ho tro thao tac DOM trong Google Flow.
+- Chrome debug/launcher da load extension local bang `--load-extension`.
+- Log moi chu yeu da doi sang English de tranh loi mojibake trong terminal.
 
-### Tool 2 - Scene Breakdown
-- Bo field `SCENE STYLE PROMPT` khoi UI; scene style van lay ngam tu active profile.
-- Pre-scan gio tao enriched continuity bible cho characters/backgrounds:
-  - `description`, `continuity_traits`, `scene_state_rules`, `do_not_show`, `era_context`, `sample_scenes`.
-- Prompt pre-scan da co rule:
-  - narrator/voiceover khong phai character neu khong hien tren man hinh.
-  - ngoi ke thu 2 / "ban" / implied viewer map ve `protagonist`.
-  - background co the la visual space nhu `phone-screen`, `social-media-feed`, `success-feed`.
-  - khong ep outfit/boi canh hien dai neu script la co dai, fantasy, hospital, school, etc.
-- Assign Assets gio viet `image_prompt` rieng cho tung scene, dua tren:
-  - prescan_data,
-  - character/background list,
-  - character style,
-  - background style,
-  - scene style.
-- Them safe asset naming cho G-Labs:
-  - brand/IP/dia danh/tieng rieng nhu `vietcombank`, `thu-do-ha-noi`, `doraemon` -> `Location01` / `Character01`.
-- Them Run Pipeline: clean script -> split scenes -> pre-scan -> assign assets -> deduplicate.
-- Them Deduplicate: gop scene lien ke trung character + background.
-- Tool 2 truyen sang Tool 3 ca `prescan_data`, khong chi list ten.
+## Workflow hien tai
 
-### Tool 3 - Asset Reference Prompts
-- Ket noi nut `Generate All Prompts` chay that.
-- Input hien dung:
-  - `prescan_data` tu Tool 2,
-  - danh sach character/background,
-  - topic,
-  - channel description,
-  - character style,
-  - background style,
-  - scene style,
-  - channel DNA,
-  - style guide.
-- `threads/asset_prompt_worker.py` da duoc nang prompt:
-  - tao character reference sheet prompt.
-  - tao background reference sheet prompt.
-  - dung DNA/Style Guide chi cho visual rules: palette, silhouette, protagonist identity, recurring props, cultural setting, no-logo/no-luxury.
-- UI Tool 3 co output tabs:
-  - `Characters`
-  - `Backgrounds`
-  - `All Prompts`
-- Them `Copy Tab` va `Export Tab`.
-- Luong dung dung: moi topic/video nen Generate All Prompts mot lan sau khi Tool 2 pre-scan/assign xong, vi character/background reference phu thuoc noi dung tung video.
+1. Nhap prompt vao Tool 8.
+2. Chon 1-5 anh reference cho tung row neu can.
+3. Tool upload tung anh reference len Flow.
+4. Tool go prompt.
+5. Tool search va add tung anh reference vao cau lenh.
+6. Tool bam tao anh va luu output ve folder da chon.
 
-## Kiem Tra Da Chay
+## Chua lam / can theo doi
 
-```powershell
-python -m py_compile threads/asset_prompt_worker.py ui/tab_asset_prompts.py ui/tab_scene_breakdown.py ui/main_window.py
-```
+- Chua xac minh 100% Flow native co giu duoc nhieu reference thumbnail rieng biet hay khong trong moi model.
+- Neu them anh thu 2 van lam anh 1 bien mat tren Flow, can debug tiep nut `+`/attach trong composer cua Flow.
+- Extension helper moi la ban noi bo don gian, chua co UI quan ly rieng trong Chrome.
+- Chua lam chay song song nhieu luong generation.
+- Chua lam phan video/Veo3 chi tiet, hien tap trung vao image flow.
+- File `ui/glabs_engine.py` dang co mot so text/comment bi mojibake tu cac lan sua truoc, code van compile duoc nhung nen cleanup encoding sau.
 
-## Luu Y Worktree
+## File chinh da dung
 
-- Chua commit/stage.
-- `__pycache__` la file tracked trong repo; neu compile/import lam doi `.pyc`, restore lai truoc khi commit.
-- Cac file dang co thay doi lien quan phien nay:
-  - `.gitignore`
-  - `threads/gemini_retry.py`
-  - `threads/topic_worker.py`
-  - `threads/research_worker.py`
-  - `threads/script_worker.py`
-  - `threads/scene_worker.py`
-  - `threads/asset_prompt_worker.py`
-  - `ui/tab_scene_breakdown.py`
-  - `ui/tab_asset_prompts.py`
-  - `ui/main_window.py`
-
+- `ui/tab_glabs.py`
+- `ui/glabs_engine.py`
+- `launch_chrome.py`
+- `extensions/rx-flow-helper/manifest.json`
+- `extensions/rx-flow-helper/content.js`
