@@ -16,7 +16,7 @@ Root cause fix:
 """
 
 from playwright.sync_api import sync_playwright, Page
-import time, os, re, base64, socket, subprocess, sys, unicodedata
+import time, os, re, base64, socket, subprocess, sys, unicodedata, threading
 from datetime import datetime
 from pathlib import Path
 
@@ -29,6 +29,9 @@ GEN_TIMEOUT   = 180
 STABLE_WAIT   = 3
 BETWEEN_DELAY = 2
 RX_FLOW_HELPER_DIR = str(Path(__file__).resolve().parents[1] / "extensions" / "rx-flow-helper")
+PROJECT_CREATE_LOCK = threading.Lock()
+CHROME_START_LOCK = threading.Lock()
+CLAIMED_PROJECT_URLS = set()
 
 CHROME_PATHS_WINDOWS = [
     r"C:\Program Files\Google\Chrome\Application\chrome.exe",
@@ -247,6 +250,14 @@ def wait_for_project_page(page: Page, log_fn=print, timeout=20) -> bool:
     deadline = time.time() + timeout
     signals = ['text="NhÃ¢n váº­t"', 'text="Characters"', 'div[role="textbox"]', 'text="Cáº£nh"']
     while time.time() < deadline:
+        if "/project/" not in page.url:
+            time.sleep(0.8)
+            continue
+        log_fn(f"   Project URL detected: {page.url}")
+        try:
+            page.wait_for_load_state("domcontentloaded", timeout=5000)
+        except Exception:
+            pass
         for sig in signals:
             try:
                 el = page.query_selector(sig)
@@ -255,13 +266,213 @@ def wait_for_project_page(page: Page, log_fn=print, timeout=20) -> bool:
                     return True
             except Exception:
                 pass
+        log_fn("   Project page ready (URL confirmed)")
+        return True
         time.sleep(0.8)
+    log_fn(f"   ERROR project page not detected. Current URL: {page.url}")
     return False
 
 
-def enter_project(page: Page, log_fn=print) -> bool:
+def find_project_page(context, exclude_urls: set[str] | None = None):
+    exclude_urls = exclude_urls or set()
+    for candidate in reversed(context.pages):
+        try:
+            if "/project/" in candidate.url and candidate.url not in exclude_urls:
+                return candidate
+        except Exception:
+            pass
+    return None
+
+
+def scan_project_urls(page: Page) -> list[str]:
+    try:
+        return page.evaluate(r"""() => {
+            const urls = [];
+            document.querySelectorAll('a[href*="/project/"]').forEach(a => {
+                if (a.href) urls.push(a.href);
+            });
+            document.querySelectorAll('[data-href*="/project/"], [href*="/project/"]').forEach(el => {
+                const href = el.getAttribute('href') || el.getAttribute('data-href');
+                if (href) urls.push(new URL(href, location.href).href);
+            });
+            return [...new Set(urls)];
+        }""") or []
+    except Exception:
+        return []
+
+
+def click_new_project_button(page: Page, log_fn=print, timeout: int = 15) -> bool:
+    deadline = time.time() + timeout
+    while time.time() < deadline:
+        try:
+            clicked = page.evaluate(r"""() => {
+                const visible = (el) => {
+                    const style = window.getComputedStyle(el);
+                    const rect = el.getBoundingClientRect();
+                    return style.display !== 'none' && style.visibility !== 'hidden' && rect.width > 0 && rect.height > 0;
+                };
+                const candidates = Array.from(document.querySelectorAll('button, a, div[role="button"]'))
+                    .filter(visible)
+                    .map(el => ({
+                        el,
+                        text: (el.innerText || el.textContent || '').replace(/\s+/g, ' ').trim(),
+                        aria: el.getAttribute('aria-label') || '',
+                    }));
+                const target = candidates.find(({ text, aria }) => {
+                    const hay = `${text} ${aria}`.toLowerCase();
+                    return hay.includes('dự án mới') ||
+                           hay.includes('du an moi') ||
+                           hay.includes('new project') ||
+                           hay.includes('+ dự án') ||
+                           hay.includes('+ du an');
+                }) || candidates.find(({ text, aria }) => {
+                    const hay = `${text} ${aria}`.toLowerCase();
+                    return hay.includes('project') && (hay.includes('new') || hay.includes('+'));
+                });
+                if (!target) return null;
+                target.el.setAttribute('data-rx-new-project', 'true');
+                return target.text || target.aria || 'new project button';
+            }""")
+            if clicked:
+                page.click('[data-rx-new-project="true"]', force=True, timeout=5000)
+                log_fn(f"   New project clicked: '{clicked[:60]}'")
+                return True
+        except Exception as e:
+            log_fn(f"   WARN new project click attempt failed: {e}")
+        time.sleep(1.0)
+    log_fn("   ERROR new project button not found.")
+    return False
+
+
+def create_and_claim_project_from_landing(page: Page, log_fn=print, worker_id: int = 1):
+    log_fn("   Creating new Flow project from landing...")
+    page.goto(FLOW_URL, wait_until="domcontentloaded", timeout=30000)
+    time.sleep(2)
+    before_urls = set(scan_project_urls(page))
+    log_fn(f"   Existing project link(s) before create: {len(before_urls)}")
+
+    if not click_new_project_button(page, log_fn):
+        return None
+
+    time.sleep(4)
+    try:
+        if "/project/" in page.url:
+            log_fn("   Create click navigated directly into a project; returning to landing to claim URL.")
+    except Exception:
+        pass
+
+    page.goto(FLOW_URL, wait_until="domcontentloaded", timeout=30000)
+    time.sleep(3)
+
+    deadline = time.time() + 30
+    while time.time() < deadline:
+        urls = scan_project_urls(page)
+        new_urls = [u for u in urls if u not in before_urls]
+        unclaimed_new = [u for u in new_urls if u not in CLAIMED_PROJECT_URLS]
+        unclaimed_any = [u for u in urls if u not in CLAIMED_PROJECT_URLS]
+        chosen = unclaimed_new[0] if unclaimed_new else (unclaimed_any[0] if unclaimed_any else None)
+        log_fn(
+            f"   Project links after create: total={len(urls)} new={len(new_urls)} "
+            f"claimed={len(CLAIMED_PROJECT_URLS)}"
+        )
+        if chosen:
+            CLAIMED_PROJECT_URLS.add(chosen)
+            log_fn(f"   Worker {worker_id} claimed project: {chosen}")
+            page.goto(chosen, wait_until="domcontentloaded", timeout=30000)
+            wait_for_project_page(page, log_fn, timeout=10)
+            return page
+        time.sleep(2)
+        try:
+            page.reload(wait_until="domcontentloaded", timeout=20000)
+        except Exception:
+            page.goto(FLOW_URL, wait_until="domcontentloaded", timeout=30000)
+    log_fn("   ERROR could not claim a unique project URL after create.")
+    return None
+
+
+def click_new_project(page: Page, log_fn=print, timeout: int = 20):
+    log_fn("   Creating new Flow project...")
+    before_project_urls = {
+        p.url for p in page.context.pages
+        if "/project/" in p.url
+    }
+    deadline = time.time() + timeout
+    while time.time() < deadline:
+        try:
+            clicked = page.evaluate(r"""() => {
+                const visible = (el) => {
+                    const style = window.getComputedStyle(el);
+                    const rect = el.getBoundingClientRect();
+                    return style.display !== 'none' && style.visibility !== 'hidden' && rect.width > 0 && rect.height > 0;
+                };
+                const candidates = Array.from(document.querySelectorAll('button, a, div[role="button"]'))
+                    .filter(visible)
+                    .map(el => ({
+                        el,
+                        text: (el.innerText || el.textContent || '').replace(/\s+/g, ' ').trim(),
+                        aria: el.getAttribute('aria-label') || '',
+                    }));
+                const target = candidates.find(({ text, aria }) => {
+                    const hay = `${text} ${aria}`.toLowerCase();
+                    return hay.includes('dự án mới') ||
+                           hay.includes('du an moi') ||
+                           hay.includes('new project') ||
+                           hay.includes('+ dự án') ||
+                           hay.includes('+ du an');
+                }) || candidates.find(({ text, aria }) => {
+                    const hay = `${text} ${aria}`.toLowerCase();
+                    return hay.includes('project') && (hay.includes('new') || hay.includes('+'));
+                });
+                if (!target) return null;
+                target.el.setAttribute('data-rx-new-project', 'true');
+                return target.text || target.aria || 'new project button';
+            }""")
+            if clicked:
+                page.click('[data-rx-new-project="true"]', force=True, timeout=5000)
+                log_fn(f"   New project clicked: '{clicked[:60]}'")
+                inner_deadline = time.time() + 30
+                while time.time() < inner_deadline:
+                    if "/project/" in page.url:
+                        wait_for_project_page(page, log_fn, timeout=5)
+                        return page
+                    project_page = find_project_page(page.context, before_project_urls)
+                    if project_page:
+                        try:
+                            project_page.bring_to_front()
+                        except Exception:
+                            pass
+                        log_fn(f"   Project opened in tab: {project_page.url}")
+                        wait_for_project_page(project_page, log_fn, timeout=5)
+                        return project_page
+                    project_urls = [u for u in scan_project_urls(page) if u not in before_project_urls]
+                    if project_urls:
+                        project_url = project_urls[0]
+                        log_fn(f"   Project link appeared after create: {project_url}")
+                        page.goto(project_url, wait_until="domcontentloaded", timeout=30000)
+                        wait_for_project_page(page, log_fn, timeout=10)
+                        return page
+                    time.sleep(0.8)
+                log_fn(f"   WARN new project click did not expose a project URL yet. Current URL: {page.url}")
+        except Exception as e:
+            log_fn(f"   WARN new project click attempt failed: {e}")
+        time.sleep(1.0)
+    log_fn("   ERROR new project button not found.")
+    return None
+
+
+def enter_project(page: Page, log_fn=print, force_new: bool = False, worker_id: int = 1):
     log_fn("   Finding Flow project...")
     time.sleep(2)
+    if force_new:
+        log_fn("   Waiting for project creation slot...")
+        with PROJECT_CREATE_LOCK:
+            log_fn("   Project creation slot acquired.")
+            try:
+                return create_and_claim_project_from_landing(page, log_fn, worker_id=worker_id)
+            except Exception as e:
+                log_fn(f"   ERROR create/claim project failed: {e}")
+                return None
+
     js = """() => {
         const res = [];
         document.querySelectorAll('a').forEach(a => {
@@ -276,14 +487,10 @@ def enter_project(page: Page, log_fn=print) -> bool:
         if urls:
             log_fn(f"   Opening project: {urls[0][:80]}")
             page.goto(urls[0], wait_until="domcontentloaded", timeout=20000)
-            return wait_for_project_page(page, log_fn)
+            return page if wait_for_project_page(page, log_fn) else None
     except Exception as e:
         log_fn(f"   WARN project scan failed: {e}")
-    log_fn("   Creating new project...")
-    el, _ = find_el(page, NEW_PROJECT_SELECTORS, timeout=8000)
-    if not el: return False
-    el.click()
-    return wait_for_project_page(page, log_fn, timeout=20)
+    return click_new_project(page, log_fn)
 
 
 def fill_prompt(page: Page, prompt: str, log_fn=print) -> bool:
@@ -304,6 +511,12 @@ def fill_prompt(page: Page, prompt: str, log_fn=print) -> bool:
 
 
 def click_submit(page: Page, log_fn=print) -> bool:
+    try:
+        page.keyboard.press("Escape")
+        time.sleep(0.3)
+    except Exception:
+        pass
+
     el, _ = find_el(page, SUBMIT_SELECTORS, timeout=5000)
     if el:
         log_fn("   Submit clicked.")
@@ -324,6 +537,45 @@ def click_submit(page: Page, log_fn=print) -> bool:
             log_fn(f"   JS submit clicked: '{clicked[:30]}'"); return True
     except Exception as e:
         log_fn(f"   WARN JS submit error: {e}")
+    try:
+        clicked = page.evaluate(r"""() => {
+            const visible = (el) => {
+                const style = window.getComputedStyle(el);
+                const rect = el.getBoundingClientRect();
+                return style.display !== 'none' && style.visibility !== 'hidden' && rect.width > 0 && rect.height > 0;
+            };
+            const boxes = Array.from(document.querySelectorAll('textarea, [contenteditable="true"], [role="textbox"]')).filter(visible);
+            const promptBox = boxes[boxes.length - 1];
+            const promptRect = promptBox ? promptBox.getBoundingClientRect() : null;
+            const buttons = Array.from(document.querySelectorAll('button, [role="button"]')).filter(visible);
+            const candidates = buttons.map((button) => {
+                const rect = button.getBoundingClientRect();
+                const txt = (button.innerText || button.textContent || button.getAttribute('aria-label') || '').toLowerCase();
+                const icon = txt.includes('arrow') || txt.includes('send') || txt.includes('tạo') || txt.includes('generate') || txt.includes('play_arrow');
+                const nearComposer = !promptRect || (
+                    rect.top >= promptRect.top - 80 &&
+                    rect.bottom <= promptRect.bottom + 90 &&
+                    rect.left >= promptRect.right - 160
+                );
+                const circular = Math.abs(rect.width - rect.height) < 18 && rect.width >= 32 && rect.width <= 72;
+                let score = 0;
+                if (nearComposer) score += 50;
+                if (circular) score += 20;
+                if (icon) score += 15;
+                score += rect.left / 10000;
+                return { button, score, txt };
+            }).filter(item => item.score >= 50);
+            candidates.sort((a, b) => b.score - a.score);
+            const target = candidates[0]?.button;
+            if (!target) return null;
+            target.click();
+            return candidates[0].txt || 'composer arrow';
+        }""")
+        if clicked:
+            log_fn(f"   Submit clicked via composer arrow: '{str(clicked)[:30]}'")
+            return True
+    except Exception as e:
+        log_fn(f"   WARN composer arrow submit error: {e}")
     log_fn("   Submit fallback via Enter.")
     page.keyboard.press("Enter")
     return True
@@ -650,7 +902,7 @@ def get_reference_search_input(page: Page):
     return None
 
 
-def click_add_reference_to_prompt(page: Page, log_fn=print, timeout: int = 20) -> bool:
+def click_add_reference_to_prompt(page: Page, log_fn=print, timeout: int = 45) -> bool:
     deadline = time.time() + timeout
     selectors = [
         'button:has-text("Thêm vào câu lệnh")',
@@ -695,10 +947,42 @@ def click_add_reference_to_prompt(page: Page, log_fn=print, timeout: int = 20) -
         except Exception:
             pass
 
-        time.sleep(0.5)
+        time.sleep(0.8)
 
     log_fn("   WARN add-to-prompt button not found after selecting reference.")
     return False
+
+
+def count_composer_reference_thumbs(page: Page) -> int:
+    try:
+        return int(page.evaluate(r"""() => {
+            const visible = (el) => {
+                const style = window.getComputedStyle(el);
+                const rect = el.getBoundingClientRect();
+                return style.display !== 'none' && style.visibility !== 'hidden' && rect.width > 0 && rect.height > 0;
+            };
+            const boxes = Array.from(document.querySelectorAll('textarea, [contenteditable="true"], [role="textbox"]')).filter(visible);
+            const promptBox = boxes[boxes.length - 1];
+            const promptRect = promptBox ? promptBox.getBoundingClientRect() : null;
+            const imgs = Array.from(document.querySelectorAll('img')).filter(img => {
+                if (!visible(img)) return false;
+                const rect = img.getBoundingClientRect();
+                const src = img.currentSrc || img.src || '';
+                if (!src || src.startsWith('data:image/svg') || src.includes('.svg')) return false;
+                if (img.naturalWidth < 20 && img.width < 20) return false;
+                if (img.naturalHeight < 20 && img.height < 20) return false;
+                if (!promptRect) return rect.top > window.innerHeight * 0.55;
+                const nearComposer =
+                    rect.bottom >= promptRect.top - 140 &&
+                    rect.top <= promptRect.bottom + 80 &&
+                    rect.left >= promptRect.left - 40 &&
+                    rect.right <= promptRect.right + 80;
+                return nearComposer;
+            });
+            return imgs.length;
+        }""") or 0)
+    except Exception:
+        return 0
 
 
 def attach_reference_with_extension(page: Page, image_path: str, log_fn=print, timeout_ms: int = 300000) -> bool | None:
@@ -745,6 +1029,8 @@ def attach_reference_image_to_prompt(page: Page, image_path: str, log_fn=print, 
     attempt = 0
     queries = (stem, basename)
     search_input = None
+    before_thumb_count = count_composer_reference_thumbs(page)
+    log_fn(f"   Composer reference count before attach: {before_thumb_count}")
 
     while time.time() < deadline and not selected:
         if attempt == 0 or attempt % 12 == 0:
@@ -771,7 +1057,7 @@ def attach_reference_image_to_prompt(page: Page, image_path: str, log_fn=print, 
             page.keyboard.press("Control+a")
             page.keyboard.press("Backspace")
             search_input.fill(query)
-            time.sleep(1.0)
+            time.sleep(2.0)
 
             found = page.evaluate(
                 """(q) => {
@@ -816,7 +1102,18 @@ def attach_reference_image_to_prompt(page: Page, image_path: str, log_fn=print, 
             )
             if found:
                 page.click('[data-rx-reference-result="true"]', force=True)
-                time.sleep(0.6)
+                time.sleep(1.2)
+                after_select_count = count_composer_reference_thumbs(page)
+                if after_select_count > before_thumb_count:
+                    log_fn(
+                        f"   OK Reference attached after selection: {basename} "
+                        f"({before_thumb_count}->{after_select_count})"
+                    )
+                    try:
+                        page.keyboard.press("Escape")
+                    except Exception:
+                        pass
+                    return True
                 selected = True
                 break
             if attempt == 1 or attempt % 20 == 0:
@@ -832,11 +1129,29 @@ def attach_reference_image_to_prompt(page: Page, image_path: str, log_fn=print, 
             pass
         return False
 
-    if click_add_reference_to_prompt(page, log_fn):
-        log_fn(f"   OK Attached reference to prompt: {basename}")
-        return True
+    for add_attempt in range(2):
+        if click_add_reference_to_prompt(page, log_fn, timeout=45):
+            log_fn(f"   OK Attached reference to prompt: {basename}")
+            return True
+        after_thumb_count = count_composer_reference_thumbs(page)
+        if after_thumb_count > before_thumb_count:
+            log_fn(
+                f"   OK Reference appears attached without add button: {basename} "
+                f"({before_thumb_count}->{after_thumb_count})"
+            )
+            try:
+                page.keyboard.press("Escape")
+            except Exception:
+                pass
+            return True
+        log_fn(f"   WAIT add-to-prompt retry {add_attempt + 1}/2 for reference: {basename}")
+        time.sleep(2.0)
 
     log_fn(f"   WARN Add-to-prompt failed for reference: {basename}")
+    try:
+        page.keyboard.press("Escape")
+    except Exception:
+        pass
     return False
 
 def setup_flow_options(page: Page, expected_images: int, aspect_ratio: str, model: str,
@@ -1012,22 +1327,58 @@ def setup_flow_options(page: Page, expected_images: int, aspect_ratio: str, mode
             else:
                 log_fn("   WARN model dropdown not found.")
 
+        if seed and seed.strip():
+            seed_value = seed.strip()
+            try:
+                seed_result = page.evaluate(r"""(seedValue) => {
+                    const panel = document.querySelector('div[role="menu"][data-state="open"], div[data-test-id="settings-panel"]');
+                    const root = panel || document;
+                    const inputs = Array.from(root.querySelectorAll('input, textarea')).filter(el => {
+                        const style = window.getComputedStyle(el);
+                        const rect = el.getBoundingClientRect();
+                        return style.display !== 'none' && style.visibility !== 'hidden' && rect.width > 0 && rect.height > 0;
+                    });
+                    const describe = (el) => {
+                        const label = el.getAttribute('aria-label') || el.getAttribute('placeholder') || el.name || el.id || '';
+                        const wrapText = (el.closest('label, div, section, form')?.innerText || '').slice(0, 180);
+                        return { label, type: el.type || el.tagName, text: wrapText };
+                    };
+                    const candidates = inputs.map(describe);
+                    let target = inputs.find(el => {
+                        const label = `${el.getAttribute('aria-label') || ''} ${el.getAttribute('placeholder') || ''} ${el.name || ''} ${el.id || ''}`.toLowerCase();
+                        const text = (el.closest('label, div, section, form')?.innerText || '').toLowerCase();
+                        return label.includes('seed') || text.includes('seed');
+                    });
+                    if (!target && inputs.length === 1) target = inputs[0];
+                    if (!target) return { ok: false, reason: 'seed_input_not_found', candidates };
+                    target.focus();
+                    target.value = seedValue;
+                    target.dispatchEvent(new Event('input', { bubbles: true }));
+                    target.dispatchEvent(new Event('change', { bubbles: true }));
+                    return { ok: true, reason: 'filled', target: describe(target), candidates };
+                }""", seed_value)
+                candidates = seed_result.get("candidates", []) if isinstance(seed_result, dict) else []
+                log_fn(f"   Seed requested: {seed_value}")
+                log_fn(f"   Seed input scan: {len(candidates)} visible input(s) in settings scope")
+                for idx, cand in enumerate(candidates[:5], 1):
+                    label = str(cand.get("label", "")).strip()
+                    text = " ".join(str(cand.get("text", "")).split())[:90]
+                    log_fn(f"      Seed candidate {idx}: label='{label}' text='{text}'")
+                if isinstance(seed_result, dict) and seed_result.get("ok"):
+                    target = seed_result.get("target", {})
+                    log_fn(f"   Seed filled: {seed_value} | target='{target.get('label', '')}'")
+                else:
+                    reason = seed_result.get("reason", "unknown") if isinstance(seed_result, dict) else "unknown"
+                    log_fn(f"   WARN seed not applied: {reason}")
+            except Exception as e:
+                log_fn(f"   WARN seed diagnostic failed: {e}")
+
         page.keyboard.press("Escape"); time.sleep(0.5)
 
     except Exception as e:
         log_fn(f"   âš ï¸ Lá»—i setup_flow_options: {e}")
         try: page.keyboard.press("Escape")
         except: pass
-
-    if seed and seed.strip():
-        try:
-            inp = page.locator('input[placeholder*="Seed"], input[aria-label*="Seed"]').first
-            if inp.count() > 0:
-                inp.fill(seed.strip())
-                log_fn(f"   ðŸ”¢ ÄÃ£ khÃ³a Seed: {seed}")
-        except Exception as e:
-            log_fn(f"   âš ï¸ Lá»—i Seed: {e}")
-
 
 def get_all_images(page: Page, log_fn=None) -> list[dict]:
     try:
@@ -1100,14 +1451,16 @@ def run_auto(
     seed: str = None,
     reference_mode: str = "None",
     reference_dir: str = None,
-    manual_reference_paths: list[list[str]] = None
+    manual_reference_paths: list[list[str]] = None,
+    worker_id: int = 1,
 ) -> list[str]:
     saved = []
     uploaded_reference_keys = set()
     log_fn("\nG-Labs Engine v7")
 
     try:
-        if not ensure_chrome_running(log_fn): return []
+        with CHROME_START_LOCK:
+            if not ensure_chrome_running(log_fn): return []
 
         final_save_dir = os.path.join(save_dir, task_name) if task_name else save_dir
         os.makedirs(final_save_dir, exist_ok=True)
@@ -1117,29 +1470,33 @@ def run_auto(
             context = browser.contexts[0]
 
             page = None
-            for ep in context.pages:
-                if "labs.google" in ep.url and "flow" in ep.url:
-                    page = ep
-                    try: page.bring_to_front()
-                    except: pass
-                    log_fn("   Reusing existing Google Labs tab.")
-                    break
+            if not new_project_each_run:
+                for ep in context.pages:
+                    if "labs.google" in ep.url and "flow" in ep.url:
+                        page = ep
+                        try: page.bring_to_front()
+                        except: pass
+                        log_fn("   Reusing existing Google Labs tab.")
+                        break
 
             if not page:
                 page = context.new_page()
                 page.goto(FLOW_URL, wait_until="domcontentloaded", timeout=30000)
                 time.sleep(2)
+                log_fn(f"   Worker {worker_id}: opened a new Google Labs tab.")
 
             if new_project_each_run or "/project/" not in page.url:
                 if new_project_each_run:
                     page.goto(FLOW_URL, wait_until="domcontentloaded", timeout=30000)
                     time.sleep(2)
-                if not enter_project(page, log_fn):
+                project_page = enter_project(page, log_fn, force_new=new_project_each_run, worker_id=worker_id)
+                if not project_page:
                     log_fn("ERROR could not enter a Flow project."); return []
+                page = project_page
             else:
                 log_fn("   Existing tab is already in a project.")
 
-            log_fn(f"Project URL: {page.url}")
+            log_fn(f"Worker {worker_id} project URL: {page.url}")
             time.sleep(2)
 
             setup_flow_options(page, expected_images, aspect_ratio, model, output_type, seed, log_fn)
@@ -1221,6 +1578,7 @@ def run_auto(
                     if upload_needed:
                         for upload_path in upload_needed:
                             if upload_reference_images(page, [upload_path], log_fn):
+                                wait_for_upload_idle(page, log_fn, timeout=120)
                                 uploaded_reference_keys.add(ref_cache_key(upload_path))
                             else:
                                 log_fn(f"   WARN Reference upload failed: {os.path.basename(upload_path)}")
@@ -1231,11 +1589,14 @@ def run_auto(
 
                 if not fill_prompt(page, prompt, log_fn): continue
                 attach_ok = True
-                for ref_path in ref_paths:
+                for ref_idx, ref_path in enumerate(ref_paths, 1):
+                    log_fn(f"   Attach reference {ref_idx}/{len(ref_paths)}: {os.path.basename(ref_path)}")
                     if not attach_reference_image_to_prompt(page, ref_path, log_fn):
                         attach_ok = False
+                        break
                 if ref_paths and not attach_ok:
                     log_fn("   WARN Reference attach failed; skipping prompt to avoid generating without reference.")
+                    if on_gen_progress: on_gen_progress(done - 1, -1)
                     continue
 
                 before_urls = set(page.evaluate(GET_ALL_URLS_JS))

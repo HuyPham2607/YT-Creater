@@ -1,6 +1,7 @@
 import os
 import subprocess
 import sys
+import threading
 
 from PyQt6.QtCore import Qt, QThread, pyqtSignal
 from PyQt6.QtGui import QColor, QPixmap
@@ -20,6 +21,7 @@ from PyQt6.QtWidgets import (
     QPushButton,
     QTableWidget,
     QTableWidgetItem,
+    QTabWidget,
     QTextEdit,
     QVBoxLayout,
     QWidget,
@@ -65,11 +67,11 @@ class OutputImageContainer(QWidget):
         layout.setSpacing(8)
 
         if expected_images == 1:
-            size, font_size = 150, 28
+            size, font_size = 78, 20
         elif expected_images == 2:
-            size, font_size = 112, 24
+            size, font_size = 68, 18
         else:
-            size, font_size = 78, 18
+            size, font_size = 52, 16
 
         for idx in range(expected_images):
             label = ClickableImageLabel()
@@ -144,95 +146,71 @@ class GLabsAutomationTab(QWidget):
     def _setup_ui(self):
         self.setStyleSheet(
             """
-            QWidget { background:#0B0D13; color:#D8DDF0; font-family:'Segoe UI', sans-serif; font-size:13px; }
-            QLabel#title { color:#FFFFFF; font-size:20px; font-weight:700; }
-            QLabel#subtitle { color:#7F89AA; font-size:12px; }
-            QLabel#section { color:#9AA5C7; font-size:11px; font-weight:700; letter-spacing:1px; text-transform:uppercase; }
-            QLabel#hint { color:#7F89AA; font-size:12px; }
-            QLabel#badge_ok { background:#143828; color:#42E6A4; border:1px solid #1E6A4C; border-radius:10px; padding:4px 10px; font-weight:700; }
-            QLabel#badge_warn { background:#352214; color:#FFB45D; border:1px solid #6E4422; border-radius:10px; padding:4px 10px; font-weight:700; }
-            QFrame#panel { background:#121622; border:1px solid #252B3E; border-radius:8px; }
+            QWidget { background:#121B2D; color:#F3F7FF; font-family:'Segoe UI', sans-serif; font-size:13px; }
+            QLabel#title { color:#FFFFFF; font-size:22px; font-weight:800; }
+            QLabel#subtitle { color:#DCEAFF; font-size:11px; font-weight:700; }
+            QLabel#section { color:#D8E6FF; font-size:12px; font-weight:700; }
+            QLabel#field { color:#F3F7FF; font-size:12px; }
+            QLabel#hint { color:#91A5C8; font-size:12px; }
+            QLabel#badge_ok { background:#E93E32; color:#FFFFFF; border:none; border-radius:14px; padding:7px 14px; font-weight:800; }
+            QLabel#badge_warn { background:#A56A22; color:#FFFFFF; border:none; border-radius:14px; padding:7px 14px; font-weight:800; }
+            QFrame#panel { background:#16243C; border:1px solid #2C4268; border-radius:10px; }
+            QFrame#subpanel { background:#1A2944; border:1px solid #2E456F; border-radius:8px; }
             QLineEdit, QComboBox, QTextEdit {
-                background:#0F121C; border:1px solid #2B3146; border-radius:6px; color:#F1F4FF; padding:8px;
+                background:#1B2B48; border:1px solid #35527F; border-radius:8px; color:#FFFFFF; padding:8px;
             }
-            QLineEdit:focus, QComboBox:focus, QTextEdit:focus { border-color:#FF8A2A; }
+            QLineEdit:focus, QComboBox:focus, QTextEdit:focus { border-color:#7D8CFF; }
             QTextEdit { line-height:1.35; }
-            QCheckBox { color:#D8DDF0; spacing:8px; }
-            QCheckBox::indicator { width:16px; height:16px; border:1px solid #343B54; border-radius:4px; background:#0F121C; }
-            QCheckBox::indicator:checked { background:#FF8A2A; border-color:#FF8A2A; }
-            QPushButton { background:#1B2130; border:1px solid #31384F; border-radius:6px; color:#E9EDFF; padding:8px 12px; font-weight:600; }
-            QPushButton:hover { border-color:#FF8A2A; }
-            QPushButton:disabled { color:#69718D; border-color:#242A3B; background:#111521; }
-            QPushButton#run { background:#FF7A1A; border-color:#FF7A1A; color:#101010; padding:11px 14px; font-weight:800; }
-            QPushButton#secondary { background:#101521; }
-            QPushButton#danger { background:#24161A; border-color:#53303A; color:#FF9AAE; }
-            QTableWidget { background:#0F121C; border:1px solid #252B3E; border-radius:8px; gridline-color:#1D2333; }
-            QHeaderView::section { background:#151A28; color:#9AA5C7; border:none; border-right:1px solid #252B3E; padding:10px; font-weight:700; }
-            QTableWidget::item { border-bottom:1px solid #1D2333; padding:8px; }
-            QTableWidget::item:selected { background:#1D2638; }
+            QCheckBox { color:#F3F7FF; spacing:8px; }
+            QCheckBox::indicator { width:17px; height:17px; border:1px solid #6F86AD; border-radius:4px; background:#17233A; }
+            QCheckBox::indicator:checked { background:#23C75A; border-color:#23C75A; }
+            QPushButton { background:#213555; border:1px solid #3B5A89; border-radius:8px; color:#FFFFFF; padding:8px 12px; font-weight:700; }
+            QPushButton:hover { border-color:#83A2FF; background:#263D62; }
+            QPushButton:disabled { color:#6F7C8D; border-color:#3A4657; background:#CBD2D9; }
+            QPushButton#run { background:#19D885; border:none; color:#FFFFFF; padding:13px 16px; font-size:15px; font-weight:900; }
+            QPushButton#pause { background:#CBD2D9; border:none; color:#6E7B86; padding:13px 16px; font-weight:900; }
+            QPushButton#secondary { background:#7D55C7; border:none; }
+            QPushButton#outline { background:#1B2B48; border:1px solid #455F91; }
+            QPushButton#danger { background:#213555; border:1px solid #3B5A89; color:#FFFFFF; }
+            QPushButton#accordion { background:#1A2944; border:1px solid #2E456F; border-radius:8px; color:#FFFFFF; padding:9px 10px; text-align:left; font-weight:800; }
+            QPushButton#accordion:checked { border-color:#25C8E8; }
+            QTabWidget::pane { border:none; background:#121B2D; }
+            QTabBar::tab { background:#18253C; color:#91A5C8; border:1px solid #2D4268; padding:10px 18px; min-width:120px; font-weight:800; }
+            QTabBar::tab:selected { background:#1B2F52; color:#FFFFFF; border-color:#7D8CFF; }
+            QTableWidget { background:#15233A; border:1px solid #2C4268; border-radius:8px; gridline-color:#263A5C; }
+            QHeaderView::section { background:#192943; color:#FFFFFF; border:none; border-right:1px solid #2C4268; border-bottom:2px solid #7D8CFF; padding:10px; font-weight:800; }
+            QTableWidget::item { border-bottom:1px solid #263A5C; padding:8px; }
+            QTableWidget::item:selected { background:#243D66; }
             """
         )
 
-        root = QHBoxLayout(self)
-        root.setContentsMargins(14, 12, 14, 12)
+        root = QVBoxLayout(self)
+        root.setContentsMargins(14, 14, 14, 14)
+        root.setSpacing(0)
+
+        self.flow_tabs = QTabWidget()
+        self.flow_tabs.addTab(self._build_image_flow_page(), "Flow Image")
+        self.flow_tabs.addTab(self._build_video_flow_page(), "Flow Video")
+        root.addWidget(self.flow_tabs, 1)
+
+    def _build_image_flow_page(self):
+        page = QWidget()
+        root = QHBoxLayout(page)
+        root.setContentsMargins(0, 10, 0, 0)
         root.setSpacing(12)
 
-        left = QVBoxLayout()
+        left_widget = QWidget()
+        left_widget.setFixedWidth(390)
+        left = QVBoxLayout(left_widget)
+        left.setContentsMargins(0, 0, 0, 0)
         left.setSpacing(10)
-        root.addLayout(left, 0)
+        root.addWidget(left_widget, 0)
 
-        header = QFrame()
-        header.setObjectName("panel")
-        header_layout = QVBoxLayout(header)
-        header_layout.setContentsMargins(14, 12, 14, 12)
-        header_layout.setSpacing(6)
-
-        title_row = QHBoxLayout()
-        title_box = QVBoxLayout()
-        title_box.setSpacing(2)
-        title = QLabel("G-Labs Batch Runner")
-        title.setObjectName("title")
-        subtitle = QLabel("Tool 8 | Tao anh hang loat tu danh sach prompt")
-        subtitle.setObjectName("subtitle")
-        title_box.addWidget(title)
-        title_box.addWidget(subtitle)
-        title_row.addLayout(title_box)
-        title_row.addStretch()
-        self.lbl_engine = QLabel("Engine ready" if ENGINE_OK else "Engine missing")
+        self.lbl_engine = QLabel("Ready" if ENGINE_OK else "Engine missing")
         self.lbl_engine.setObjectName("badge_ok" if ENGINE_OK else "badge_warn")
-        title_row.addWidget(self.lbl_engine, alignment=Qt.AlignmentFlag.AlignTop)
-        header_layout.addLayout(title_row)
 
-        note = QLabel(
-            "Che do hien tai dung Chrome debug profile. Hay dang nhap Google/G-Labs mot lan trong cua so Chrome ma tool mo ra."
-        )
-        note.setWordWrap(True)
-        note.setObjectName("hint")
-        header_layout.addWidget(note)
-        left.addWidget(header)
-
-        prompt_panel = self._panel("1. Prompts")
+        prompt_panel = self._panel("Configuration & Prompts")
         prompt_lay = prompt_panel.layout()
-        prompt_toolbar = QHBoxLayout()
-        self.btn_import = QPushButton("Import TXT/Excel")
-        self.btn_import.setObjectName("secondary")
-        self.lbl_prompt_count = QLabel("0 prompts")
-        self.lbl_prompt_count.setObjectName("hint")
-        prompt_toolbar.addWidget(self.btn_import)
-        prompt_toolbar.addStretch()
-        prompt_toolbar.addWidget(self.lbl_prompt_count)
-        prompt_lay.addLayout(prompt_toolbar)
-
-        self.txt_prompts = QTextEdit()
-        self.txt_prompts.setMinimumHeight(220)
-        self.txt_prompts.setPlaceholderText(
-            "Moi dong la 1 prompt.\nVi du:\nA 2D cinematic Vietnamese cafe interior at night, 16:9, no text, no people..."
-        )
-        prompt_lay.addWidget(self.txt_prompts)
-        left.addWidget(prompt_panel, 1)
-
-        settings_panel = self._panel("2. Settings")
-        settings_lay = settings_panel.layout()
 
         grid = QGridLayout()
         grid.setHorizontalSpacing(8)
@@ -255,53 +233,72 @@ class GLabsAutomationTab(QWidget):
         grid.addWidget(self.cmb_ratio, 1, 1)
         grid.addWidget(self._field_label("Images / prompt"), 2, 0)
         grid.addWidget(self.cmb_amt, 3, 0)
-        grid.addWidget(self._field_label("Quality / upscale"), 2, 1)
+        grid.addWidget(self._field_label("Quality"), 2, 1)
         grid.addWidget(self.cmb_quality, 3, 1)
-        settings_lay.addLayout(grid)
+
+        self.txt_concurrency = QLineEdit("1")
+        self.txt_delay_min = QLineEdit("5 s")
+        self.txt_delay_max = QLineEdit("10 s")
+        self.cmb_ref_mode = QComboBox()
+        self.cmb_ref_mode.addItems(["Default", "Manual per row", "Auto match"])
+        grid.addWidget(self._field_label("Concurrent runs"), 4, 0)
+        grid.addWidget(self.txt_concurrency, 5, 0)
+        grid.addWidget(self._field_label("Delay between runs"), 4, 1)
+        delay_row = QHBoxLayout()
+        delay_row.addWidget(self.txt_delay_min)
+        delay_row.addWidget(QLabel("-"))
+        delay_row.addWidget(self.txt_delay_max)
+        grid.addLayout(delay_row, 5, 1)
+        grid.addWidget(self._field_label("Reference mode"), 6, 0)
+        grid.addWidget(self.cmb_ref_mode, 7, 0)
+        prompt_lay.addLayout(grid)
 
         self.chk_seed = QCheckBox("Lock seed")
         self.txt_seed = QLineEdit()
         self.txt_seed.setPlaceholderText("Optional seed")
         seed_row = QHBoxLayout()
-        seed_row.addWidget(self.chk_seed)
         seed_row.addWidget(self.txt_seed, 1)
-        settings_lay.addLayout(seed_row)
+        seed_row.addWidget(self.chk_seed)
+        prompt_lay.addLayout(seed_row)
 
-        self.chk_task_folder = QCheckBox("Create subfolder for this run")
+        import_row = QHBoxLayout()
+        self.btn_import = QPushButton("Import TXT/Excel")
+        self.btn_import.setObjectName("secondary")
+        self.lbl_prompt_count = QLabel("0 prompt")
+        self.lbl_prompt_count.setObjectName("hint")
+        import_row.addWidget(self.btn_import, 1)
+        import_row.addWidget(self.lbl_prompt_count, 1)
+        prompt_lay.addLayout(import_row)
+
+        self.txt_prompts = QTextEdit()
+        self.txt_prompts.setMinimumHeight(150)
+        self.txt_prompts.setPlaceholderText("Enter prompts here")
+        prompt_lay.addWidget(self.txt_prompts, 1)
+
+        self.chk_task_folder = QCheckBox("Create task folder")
         self.chk_task_folder.setChecked(True)
-        settings_lay.addWidget(self.chk_task_folder)
+        prompt_lay.addWidget(self.chk_task_folder)
 
-        settings_lay.addWidget(self._field_label("Auto reference folder"))
+        prompt_lay.addWidget(self._field_label("Reference folder"))
         ref_row = QHBoxLayout()
         self.txt_ref_dir = QLineEdit("")
-        self.txt_ref_dir.setPlaceholderText("Optional: auto match image filename from prompt")
-        self.btn_choose_ref = QPushButton("Browse")
+        self.txt_ref_dir.setPlaceholderText("reference_image")
+        self.btn_choose_ref = QPushButton("Open")
         ref_row.addWidget(self.txt_ref_dir, 1)
         ref_row.addWidget(self.btn_choose_ref)
-        settings_lay.addLayout(ref_row)
+        prompt_lay.addLayout(ref_row)
 
-        ref_hint = QLabel("Manual references are added per row in the queue. This folder is only for filename auto-match fallback.")
-        ref_hint.setWordWrap(True)
-        ref_hint.setObjectName("hint")
-        settings_lay.addWidget(ref_hint)
-
-        settings_lay.addWidget(self._field_label("Output folder"))
+        prompt_lay.addWidget(self._field_label("Output folder"))
         out_row = QHBoxLayout()
         self.txt_out_dir = QLineEdit("outputs/glabs_images")
-        self.btn_choose_out = QPushButton("Browse")
+        self.btn_choose_out = QPushButton("Open")
         out_row.addWidget(self.txt_out_dir, 1)
         out_row.addWidget(self.btn_choose_out)
-        settings_lay.addLayout(out_row)
-
-        api_note = QLabel("Webhook API / extension helper: planned. UI nay truoc mat chay bang local engine hien co.")
-        api_note.setWordWrap(True)
-        api_note.setObjectName("hint")
-        settings_lay.addWidget(api_note)
-
-        left.addWidget(settings_panel)
+        prompt_lay.addLayout(out_row)
+        left.addWidget(prompt_panel, 1)
 
         run_row = QHBoxLayout()
-        self.btn_run = QPushButton("Run Batch")
+        self.btn_run = QPushButton("RUN NOW")
         self.btn_run.setObjectName("run")
         self.btn_clear = QPushButton("Clear")
         self.btn_clear.setObjectName("danger")
@@ -314,10 +311,10 @@ class GLabsAutomationTab(QWidget):
         root.addLayout(right, 1)
 
         output_header = QFrame()
-        output_header.setObjectName("panel")
+        output_header.setObjectName("subpanel")
         output_lay = QHBoxLayout(output_header)
         output_lay.setContentsMargins(14, 10, 14, 10)
-        output_title = QLabel("Run Queue & Outputs")
+        output_title = QLabel("Queue & Results")
         output_title.setObjectName("section")
         self.lbl_run_status = QLabel("Idle")
         self.lbl_run_status.setObjectName("hint")
@@ -328,28 +325,217 @@ class GLabsAutomationTab(QWidget):
 
         self.table = QTableWidget()
         self.table.setColumnCount(7)
-        self.table.setHorizontalHeaderLabels(["", "#", "Reference", "Prompt", "Settings", "Output", "Status"])
+        self.table.setHorizontalHeaderLabels(["", "No.", "Reference", "Prompt", "Settings", "Output", "Progress"])
         self.table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
         self.table.verticalHeader().setVisible(False)
         self.table.setShowGrid(False)
 
         header = self.table.horizontalHeader()
+        header.setStretchLastSection(False)
+        header.setMinimumSectionSize(32)
         header.setSectionResizeMode(0, QHeaderView.ResizeMode.Fixed)
         self.table.setColumnWidth(0, 38)
         header.setSectionResizeMode(1, QHeaderView.ResizeMode.Fixed)
         self.table.setColumnWidth(1, 44)
         header.setSectionResizeMode(2, QHeaderView.ResizeMode.Fixed)
-        self.table.setColumnWidth(2, 310)
-        header.setSectionResizeMode(3, QHeaderView.ResizeMode.Fixed)
-        self.table.setColumnWidth(3, 300)
+        self.table.setColumnWidth(2, 220)
+        header.setSectionResizeMode(3, QHeaderView.ResizeMode.Stretch)
         header.setSectionResizeMode(4, QHeaderView.ResizeMode.Fixed)
-        self.table.setColumnWidth(4, 160)
+        self.table.setColumnWidth(4, 150)
         header.setSectionResizeMode(5, QHeaderView.ResizeMode.Fixed)
-        self.table.setColumnWidth(5, 260)
+        self.table.setColumnWidth(5, 165)
         header.setSectionResizeMode(6, QHeaderView.ResizeMode.Fixed)
-        self.table.setColumnWidth(6, 120)
+        self.table.setColumnWidth(6, 105)
 
         right.addWidget(self.table, 1)
+        return page
+
+    def _build_video_flow_page(self):
+        page = QWidget()
+        root = QHBoxLayout(page)
+        root.setContentsMargins(0, 10, 0, 0)
+        root.setSpacing(12)
+
+        left_widget = QWidget()
+        left_widget.setFixedWidth(390)
+        left = QVBoxLayout(left_widget)
+        left.setContentsMargins(0, 0, 0, 0)
+        left.setSpacing(10)
+        root.addWidget(left_widget, 0)
+
+        panel = self._panel("Configuration & Prompts")
+        lay = panel.layout()
+
+        basic_btn = QPushButton("Basic settings  [open]")
+        basic_btn.setObjectName("accordion")
+        basic_btn.setCheckable(True)
+        basic_btn.setChecked(True)
+        lay.addWidget(basic_btn)
+
+        basic_content = QFrame()
+        basic_content.setObjectName("subpanel")
+        basic_lay = QVBoxLayout(basic_content)
+        basic_lay.setContentsMargins(10, 10, 10, 10)
+        basic_grid = QGridLayout()
+        basic_grid.setHorizontalSpacing(8)
+        basic_grid.setVerticalSpacing(8)
+        video_model = QComboBox()
+        video_model.addItems(["Veo3 Fast [10 Credit]", "Veo3 Quality", "Veo2"])
+        video_ratio = QComboBox()
+        video_ratio.addItems(["16:9 Landscape", "9:16 Portrait", "1:1 Square"])
+        video_concurrency = QLineEdit("1")
+        video_count = QLineEdit("1")
+        video_output = QLineEdit("outputs/glabs_videos")
+        video_output_btn = QPushButton("Open")
+        basic_grid.addWidget(self._field_label("Model"), 0, 0)
+        basic_grid.addWidget(self._field_label("Video ratio"), 0, 1)
+        basic_grid.addWidget(video_model, 1, 0)
+        basic_grid.addWidget(video_ratio, 1, 1)
+        basic_grid.addWidget(self._field_label("Concurrent runs"), 2, 0)
+        basic_grid.addWidget(self._field_label("Videos / prompt"), 2, 1)
+        basic_grid.addWidget(video_concurrency, 3, 0)
+        basic_grid.addWidget(video_count, 3, 1)
+        basic_grid.addWidget(self._field_label("Output folder"), 4, 0, 1, 2)
+        output_row = QHBoxLayout()
+        output_row.addWidget(video_output, 1)
+        output_row.addWidget(video_output_btn)
+        basic_grid.addLayout(output_row, 5, 0, 1, 2)
+        basic_lay.addLayout(basic_grid)
+        lay.addWidget(basic_content)
+
+        advanced_btn = QPushButton("Advanced settings  [closed]")
+        advanced_btn.setObjectName("accordion")
+        advanced_btn.setCheckable(True)
+        advanced_btn.setChecked(False)
+        lay.addWidget(advanced_btn)
+
+        advanced_content = QFrame()
+        advanced_content.setObjectName("subpanel")
+        advanced_lay = QVBoxLayout(advanced_content)
+        advanced_lay.setContentsMargins(10, 10, 10, 10)
+        advanced_grid = QGridLayout()
+        advanced_grid.setHorizontalSpacing(8)
+        advanced_grid.setVerticalSpacing(8)
+        quality = QComboBox()
+        quality.addItems(["HD", "FHD", "4K"])
+        seed = QLineEdit("503233")
+        lock_seed = QCheckBox("Lock seed")
+        ref_type = QComboBox()
+        ref_type.addItems(["Default", "First frame", "First & last frame"])
+        delay_min = QLineEdit("10 s")
+        delay_max = QLineEdit("20 s")
+        duration = QComboBox()
+        duration.addItems(["4s", "6s", "8s", "10s"])
+        ref_folder = QLineEdit("reference_image")
+        ref_folder_btn = QPushButton("Open")
+        advanced_grid.addWidget(self._field_label("Quality"), 0, 0)
+        advanced_grid.addWidget(self._field_label("Seed"), 0, 1)
+        advanced_grid.addWidget(quality, 1, 0)
+        seed_row = QHBoxLayout()
+        seed_row.addWidget(seed, 1)
+        seed_row.addWidget(lock_seed)
+        advanced_grid.addLayout(seed_row, 1, 1)
+        advanced_grid.addWidget(self._field_label("Reference type"), 2, 0)
+        advanced_grid.addWidget(self._field_label("Delay between runs"), 2, 1)
+        advanced_grid.addWidget(ref_type, 3, 0)
+        video_delay_row = QHBoxLayout()
+        video_delay_row.addWidget(delay_min)
+        video_delay_row.addWidget(QLabel("-"))
+        video_delay_row.addWidget(delay_max)
+        advanced_grid.addLayout(video_delay_row, 3, 1)
+        advanced_grid.addWidget(self._field_label("Video duration"), 4, 0)
+        advanced_grid.addWidget(duration, 5, 0)
+        advanced_grid.addWidget(self._field_label("Reference folder"), 6, 0, 1, 2)
+        ref_video_row = QHBoxLayout()
+        ref_video_row.addWidget(ref_folder, 1)
+        ref_video_row.addWidget(ref_folder_btn)
+        advanced_grid.addLayout(ref_video_row, 7, 0, 1, 2)
+        advanced_lay.addLayout(advanced_grid)
+        advanced_content.setVisible(False)
+        lay.addWidget(advanced_content)
+
+        def set_video_settings_open(section):
+            basic_open = section == "basic"
+            basic_content.setVisible(basic_open)
+            advanced_content.setVisible(not basic_open)
+            basic_btn.setChecked(basic_open)
+            advanced_btn.setChecked(not basic_open)
+            basic_btn.setText("Basic settings  [open]" if basic_open else "Basic settings  [closed]")
+            advanced_btn.setText("Advanced settings  [open]" if not basic_open else "Advanced settings  [closed]")
+
+        basic_btn.clicked.connect(lambda checked=False: set_video_settings_open("basic"))
+        advanced_btn.clicked.connect(lambda checked=False: set_video_settings_open("advanced"))
+
+        import_row = QHBoxLayout()
+        btn_import_video = QPushButton("Import TXT/Excel")
+        btn_import_video.setObjectName("secondary")
+        import_row.addWidget(btn_import_video, 1)
+        import_row.addWidget(QLabel("0 rows / 0 prompts"), 1)
+        lay.addLayout(import_row)
+
+        txt_video_prompts = QTextEdit()
+        txt_video_prompts.setMinimumHeight(180)
+        txt_video_prompts.setPlaceholderText("Enter prompts here")
+        lay.addWidget(txt_video_prompts, 1)
+        lay.addWidget(QCheckBox("Use one prompt for all rows"))
+        left.addWidget(panel, 1)
+
+        row = QHBoxLayout()
+        btn_add = QPushButton("Add to queue")
+        btn_add.setObjectName("outline")
+        btn_manage = QPushButton("Manage queue (0)")
+        btn_manage.setObjectName("outline")
+        row.addWidget(btn_add)
+        row.addWidget(btn_manage)
+        left.addLayout(row)
+
+        controls = QHBoxLayout()
+        run = QPushButton("RUN NOW")
+        run.setObjectName("run")
+        pause = QPushButton("PAUSE")
+        pause.setObjectName("pause")
+        stop = QPushButton("STOP")
+        stop.setObjectName("pause")
+        run.setEnabled(False)
+        pause.setEnabled(False)
+        stop.setEnabled(False)
+        controls.addWidget(run)
+        controls.addWidget(pause)
+        controls.addWidget(stop)
+        left.addLayout(controls)
+
+        right = QVBoxLayout()
+        root.addLayout(right, 1)
+        table = QTableWidget()
+        table.setColumnCount(7)
+        table.setHorizontalHeaderLabels(["", "No.", "Type", "Start - End Image", "Prompt", "Output", "Progress"])
+        table.verticalHeader().setVisible(False)
+        table.setShowGrid(False)
+        header = table.horizontalHeader()
+        header.setStretchLastSection(False)
+        header.setMinimumSectionSize(32)
+        header.setSectionResizeMode(0, QHeaderView.ResizeMode.Fixed)
+        table.setColumnWidth(0, 38)
+        header.setSectionResizeMode(1, QHeaderView.ResizeMode.Fixed)
+        table.setColumnWidth(1, 52)
+        header.setSectionResizeMode(2, QHeaderView.ResizeMode.Fixed)
+        table.setColumnWidth(2, 64)
+        header.setSectionResizeMode(3, QHeaderView.ResizeMode.Fixed)
+        table.setColumnWidth(3, 220)
+        header.setSectionResizeMode(4, QHeaderView.ResizeMode.Stretch)
+        header.setSectionResizeMode(5, QHeaderView.ResizeMode.Fixed)
+        table.setColumnWidth(5, 165)
+        header.setSectionResizeMode(6, QHeaderView.ResizeMode.Fixed)
+        table.setColumnWidth(6, 105)
+        right.addWidget(table, 1)
+
+        bottom = QHBoxLayout()
+        for text in ["Start image", "End image", "Delete", "Clear all", "Clear cache", "Retry failed", "Run selected", "Open session"]:
+            btn = QPushButton(text)
+            btn.setObjectName("outline")
+            bottom.addWidget(btn)
+        right.addLayout(bottom)
+        return page
 
     def _panel(self, title_text):
         panel = QFrame()
@@ -364,7 +550,7 @@ class GLabsAutomationTab(QWidget):
 
     def _field_label(self, text):
         label = QLabel(text)
-        label.setObjectName("section")
+        label.setObjectName("field")
         return label
 
     def _refresh_prompt_count(self):
@@ -429,6 +615,10 @@ class GLabsAutomationTab(QWidget):
             expected_images = int(self.cmb_amt.currentText().replace("x", ""))
         except ValueError:
             expected_images = 2
+        try:
+            worker_count = max(1, min(3, int(self.txt_concurrency.text().strip())))
+        except ValueError:
+            worker_count = 1
 
         task_name = os.path.basename(self.txt_out_dir.text().strip())
         if not task_name or task_name == "glabs_images":
@@ -447,14 +637,16 @@ class GLabsAutomationTab(QWidget):
             "reference_mode": "Auto match by filename",
             "reference_dir": self.txt_ref_dir.text().strip(),
             "manual_reference_paths": [self.manual_references.get(i, []) for i in range(len(prompts))],
+            "worker_count": worker_count,
+            "new_project_each_run": worker_count > 1,
         }
 
         self._sync_queue_preview(config)
         start_row_idx = 0
         self.is_running = True
         self.btn_run.setEnabled(False)
-        self.btn_run.setText("Running...")
-        self.lbl_run_status.setText(f"Running {len(prompts)} prompt(s)")
+        self.btn_run.setText("RUNNING...")
+        self.lbl_run_status.setText(f"Running {len(prompts)} prompt(s) on {worker_count} worker(s)")
 
         self.engine_thread = EngineThread(config, start_row_idx)
         self.engine_thread.progress_signal.connect(self._update_row_progress)
@@ -487,7 +679,7 @@ class GLabsAutomationTab(QWidget):
 
         for idx, prompt_text in enumerate(prompts):
             row = idx
-            self.table.setRowHeight(row, 176 if config["expected_images"] <= 2 else 210)
+            self.table.setRowHeight(row, 96 if config["expected_images"] <= 2 else 118)
 
             chk_widget = QWidget()
             chk_layout = QHBoxLayout(chk_widget)
@@ -506,10 +698,7 @@ class GLabsAutomationTab(QWidget):
             prompt.setForeground(QColor("#F1F4FF"))
             self.table.setItem(row, 3, prompt)
 
-            settings = QTableWidgetItem(
-                f"{config['model']}\n{config['aspect_ratio']} | {config['expected_images']}x\n"
-                f"{config['task_name'] or 'No subfolder'}"
-            )
+            settings = QTableWidgetItem(f"{config['model']}\n{config['aspect_ratio']} | {config['expected_images']}x")
             settings.setForeground(QColor("#C8D0EA"))
             settings.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
             self.table.setItem(row, 4, settings)
@@ -536,10 +725,11 @@ class GLabsAutomationTab(QWidget):
         add_btn.clicked.connect(lambda checked=False, r=row: self._choose_row_references(r))
         layout.addWidget(add_btn)
 
-        for idx in range(5):
+        visible_slots = 3
+        for idx in range(visible_slots):
             path = refs[idx] if idx < len(refs) else None
             thumb = ClickableImageLabel()
-            thumb.setFixedSize(34, 34)
+            thumb.setFixedSize(38, 38)
             if path:
                 thumb.filepath = path
                 thumb.setToolTip(path)
@@ -547,8 +737,8 @@ class GLabsAutomationTab(QWidget):
                 if not pixmap.isNull():
                     thumb.setPixmap(
                         pixmap.scaled(
-                            32,
-                            32,
+                            36,
+                            36,
                             Qt.AspectRatioMode.KeepAspectRatio,
                             Qt.TransformationMode.SmoothTransformation,
                         )
@@ -558,7 +748,10 @@ class GLabsAutomationTab(QWidget):
                     thumb.setText("img")
                     thumb.setStyleSheet("background:#111421; border:1px solid #FF8A2A; border-radius:5px; color:#FFB45D;")
             else:
-                thumb.setText(str(idx + 1))
+                if idx == visible_slots - 1:
+                    thumb.setText(f"+{5 - visible_slots}" if len(refs) <= visible_slots else f"+{len(refs) - visible_slots}")
+                else:
+                    thumb.setText("+")
                 thumb.setToolTip("Empty reference slot")
                 thumb.setStyleSheet("background:#111421; border:1px dashed #30344F; border-radius:5px; color:#59627E;")
             layout.addWidget(thumb)
@@ -639,7 +832,7 @@ class GLabsAutomationTab(QWidget):
     def _on_engine_finished(self):
         self.is_running = False
         self.btn_run.setEnabled(True)
-        self.btn_run.setText("Run Batch")
+        self.btn_run.setText("RUN NOW")
         self.lbl_run_status.setText("Finished")
 
         for row in range(self.table.rowCount()):
@@ -661,13 +854,66 @@ class EngineThread(QThread):
         self.start_row_idx = start_row_idx
 
     def run(self):
-        self.config["on_gen_start"] = lambda idx, prompt: self.status_signal.emit(
-            self.start_row_idx + idx, "Starting"
-        )
-        self.config["on_gen_progress"] = lambda idx, pct: self.progress_signal.emit(self.start_row_idx + idx, pct)
-        self.config["on_image_saved"] = lambda idx, fp: self.image_signal.emit(self.start_row_idx + idx, fp)
+        worker_count = max(1, int(self.config.get("worker_count", 1) or 1))
+        worker_count = min(worker_count, len(self.config.get("prompts", [])) or 1)
 
-        run_auto(**self.config, log_fn=print)
+        if worker_count <= 1:
+            config = dict(self.config)
+            config.pop("worker_count", None)
+            config["on_gen_start"] = lambda idx, prompt: self.status_signal.emit(
+                self.start_row_idx + idx, "Starting"
+            )
+            config["on_gen_progress"] = lambda idx, pct: self.progress_signal.emit(self.start_row_idx + idx, pct)
+            config["on_image_saved"] = lambda idx, fp: self.image_signal.emit(self.start_row_idx + idx, fp)
+            run_auto(**config, log_fn=print)
+            self.finished_signal.emit()
+            return
+
+        prompts = self.config.get("prompts", [])
+        manual_refs = self.config.get("manual_reference_paths") or [[] for _ in prompts]
+        shards = [[] for _ in range(worker_count)]
+        for global_idx, prompt in enumerate(prompts):
+            worker_slot = global_idx % worker_count
+            refs = manual_refs[global_idx] if global_idx < len(manual_refs) else []
+            shards[worker_slot].append((global_idx, prompt, refs))
+
+        def run_worker(worker_idx, jobs):
+            if not jobs:
+                return
+            local_prompts = [job[1] for job in jobs]
+            local_refs = [job[2] for job in jobs]
+            global_indices = [job[0] for job in jobs]
+            config = dict(self.config)
+            config.pop("worker_count", None)
+            config["prompts"] = local_prompts
+            config["manual_reference_paths"] = local_refs
+            config["new_project_each_run"] = True
+            config["worker_id"] = worker_idx + 1
+            config["on_gen_start"] = lambda idx, prompt: self.status_signal.emit(
+                self.start_row_idx + global_indices[idx], f"Worker {worker_idx + 1}"
+            )
+            config["on_gen_progress"] = lambda idx, pct: self.progress_signal.emit(
+                self.start_row_idx + global_indices[idx], pct
+            )
+            config["on_image_saved"] = lambda idx, fp: self.image_signal.emit(
+                self.start_row_idx + global_indices[idx], fp
+            )
+            try:
+                run_auto(**config, log_fn=lambda msg: print(f"[W{worker_idx + 1}] {msg}"))
+            except Exception as exc:
+                print(f"[W{worker_idx + 1}] ERROR worker failed: {exc}")
+                for global_idx in global_indices:
+                    self.progress_signal.emit(self.start_row_idx + global_idx, -1)
+
+        threads = [
+            threading.Thread(target=run_worker, args=(idx, jobs), daemon=False)
+            for idx, jobs in enumerate(shards)
+            if jobs
+        ]
+        for thread in threads:
+            thread.start()
+        for thread in threads:
+            thread.join()
         self.finished_signal.emit()
 
 
