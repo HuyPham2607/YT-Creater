@@ -120,18 +120,56 @@ IMAGE_SCAN_JS = r"""
             // Äáº¾M sá»‘ lÆ°á»£ng áº£nh bá»‹ cháº·n trong container NÃ€Y
             const warningIcons = Array.from(container.querySelectorAll('i.google-symbols'))
                 .filter(i => i.innerText.trim() === 'warning');
+            const normalizeText = (text) => (text || '')
+                .normalize('NFD')
+                .replace(/[\u0300-\u036f]/g, '')
+                .toLowerCase();
+            const hasPolicyReasonText = (text) => {
+                const t = normalizeText(text);
+                return (
+                    t.includes('khong the tao') ||
+                    t.includes('vi pham') ||
+                    t.includes('chinh sach') ||
+                    t.includes('policy') ||
+                    t.includes('policies') ||
+                    t.includes('violate') ||
+                    t.includes('unable to create')
+                );
+            };
+            const hasFailureTitle = (text) => {
+                const t = normalizeText(text);
+                return t.includes('khong thanh cong') || t.includes('failed');
+            };
             
             let blockedCount = 0;
             warningIcons.forEach(icon => {
-                const pTxt = (icon.parentElement ? icon.parentElement.innerText : "").toLowerCase();
-                if (pTxt.includes('vi pháº¡m') || pTxt.includes('khÃ´ng thá»ƒ táº¡o') || pTxt.includes('violate') || pTxt.includes('chÃ­nh sÃ¡ch')) blockedCount++;
+                const pTxt = icon.parentElement ? icon.parentElement.innerText : "";
+                if (hasPolicyReasonText(pTxt)) blockedCount++;
             });
             
             // Fallback náº¿u khÃ´ng bÃ³c Ä‘Æ°á»£c text cáº¡nh icon
             if (blockedCount === 0 && warningIcons.length > 0) {
-                 const cTxt = (container.innerText || "").toLowerCase();
-                 if (cTxt.includes('vi pháº¡m') || cTxt.includes('khÃ´ng thá»ƒ táº¡o') || cTxt.includes('violate') || cTxt.includes('chÃ­nh sÃ¡ch')) blockedCount = warningIcons.length;
+                 const cTxt = container.innerText || "";
+                 if (hasPolicyReasonText(cTxt)) blockedCount = warningIcons.length;
             }
+
+            // Flow sometimes renders policy failures as media cards with text only,
+            // no img/video and no material warning icon that exposes innerText.
+            const blockedTextEls = Array.from(container.querySelectorAll('*')).filter(el => {
+                const text = el.innerText || '';
+                if (!hasPolicyReasonText(text)) return false;
+                const childHasSameText = Array.from(el.children || []).some(child => hasPolicyReasonText(child.innerText || ''));
+                if (childHasSameText) return false;
+                const rect = el.getBoundingClientRect();
+                const style = window.getComputedStyle(el);
+                return style.display !== 'none' && style.visibility !== 'hidden' && rect.width > 80 && rect.height > 20;
+            });
+            const blockedTitleEls = blockedTextEls.filter(el => hasFailureTitle(el.innerText || ''));
+            const blockedCardCount = blockedTitleEls.length || blockedTextEls.length;
+            if (blockedCardCount > blockedCount) {
+                blockedCount = blockedCardCount;
+            }
+            const textPreview = (container.innerText || '').replace(/\s+/g, ' ').trim().slice(0, 300);
 
             // TRÃCH XUáº¤T PROMPT TEXT Cá»¦A DÃ’NG NÃ€Y
             let promptText = "Unknown Prompt";
@@ -178,6 +216,10 @@ IMAGE_SCAN_JS = r"""
                 images: imageData,
                 progress,
                 blockedCount,
+                warningCount: warningIcons.length,
+                blockedTextCount: blockedTextEls.length,
+                blockedTitleCount: blockedTitleEls.length,
+                textPreview,
                 isBusy: !!busyEl,
                 promptText: promptText
             });
@@ -1600,6 +1642,19 @@ def run_auto(
                     continue
 
                 before_urls = set(page.evaluate(GET_ALL_URLS_JS))
+                before_blocked_count = 0
+                curr_clean_for_baseline = re.sub(r'\s+', ' ', prompt.strip().lower())
+                for r in (page.evaluate(IMAGE_SCAN_JS) or []):
+                    row_prompt = r.get('promptText', 'Unknown Prompt')
+                    if row_prompt != "Unknown Prompt":
+                        rp_clean = re.sub(r'\s+', ' ', row_prompt.strip().lower())
+                        if rp_clean != curr_clean_for_baseline and not rp_clean.startswith(curr_clean_for_baseline) and not curr_clean_for_baseline.startswith(rp_clean):
+                            continue
+                    blocked_count = int(r.get('blockedCount') or 0)
+                    if blocked_count:
+                        before_blocked_count += blocked_count
+                if before_blocked_count > expected_images:
+                    before_blocked_count = expected_images
 
                 if not click_submit(page, log_fn): continue
 
@@ -1608,7 +1663,10 @@ def run_auto(
                 new_images         = []
                 timeout_at         = time.time() + GEN_TIMEOUT
                 last_logged_prog   = -1
+                last_logged_blocked = 0
+                last_card_debug_time = 0
                 last_change_time   = time.time()
+                prompt_blocked_count = 0
 
                 while time.time() < timeout_at:
                     all_rows = page.evaluate(IMAGE_SCAN_JS)
@@ -1634,18 +1692,53 @@ def run_auto(
                         # Row nÃ y cÃ³ chá»©a áº£nh má»›i khÃ´ng?
                         row_has_new = any(img['src'] not in before_urls for img in row_imgs)
                         row_in_progress = r.get('isBusy') or r.get('progress', 0) > 0
+                        row_blocked = r.get('blockedCount', 0) > 0
 
-                        if not row_has_new and not row_in_progress: continue
+                        if not row_has_new and not row_in_progress and not row_blocked: continue
 
                         if r.get('isBusy'): any_busy = True
                         prog = r.get('progress', 0)
                         if prog > max_prog: max_prog = prog
-                        total_blocked += r.get('blockedCount', 0)
+                        blocked_count = int(r.get('blockedCount') or 0)
+                        if blocked_count:
+                            total_blocked += blocked_count
 
                         for img in row_imgs:
                             if img['src'] in before_urls: continue
                             if img.get('isReady'): strict_ready.append(img)
                             if img.get('isReadyRelaxed'): relaxed_ready.append(img)
+
+                    total_blocked = max(0, total_blocked - before_blocked_count)
+                    if total_blocked > expected_images:
+                        total_blocked = expected_images
+
+                    should_debug_cards = (
+                        (max_prog == 0 and last_logged_prog > 0) or
+                        (total_blocked > 0 and total_blocked != last_logged_blocked)
+                    )
+                    if should_debug_cards and (time.time() - last_card_debug_time) > 2:
+                        log_fn("   Card scan debug:")
+                        for r in all_rows:
+                            preview = " ".join(str(r.get('textPreview', '')).split())[:180]
+                            log_fn(
+                                "      "
+                                f"row={r.get('rowIndex')} "
+                                f"prompt='{str(r.get('promptText', ''))[:60]}' "
+                                f"media={r.get('count')} "
+                                f"progress={r.get('progress')} "
+                                f"busy={r.get('isBusy')} "
+                                f"blocked={r.get('blockedCount')} "
+                                f"warnings={r.get('warningCount')} "
+                                f"blockedText={r.get('blockedTextCount')} "
+                                f"blockedTitle={r.get('blockedTitleCount')} "
+                                f"text='{preview}'"
+                            )
+                        last_card_debug_time = time.time()
+
+                    if total_blocked > last_logged_blocked:
+                        log_fn(f"   Policy blocked card(s): {total_blocked}/{expected_images}")
+                        last_logged_blocked = total_blocked
+                        last_change_time = time.time()
 
                     if max_prog != last_logged_prog:
                         log_fn(f"   Rendering... {max_prog}%")
@@ -1656,16 +1749,28 @@ def run_auto(
 
                     # ThoÃ¡t khi Ä‘á»§ áº£nh hoáº·c Ä‘áº¡t 100%
                     total_resolved = len(strict_ready) + total_blocked
+                    if total_blocked >= expected_images:
+                        prompt_blocked_count = total_blocked
+                        if on_gen_progress: on_gen_progress(done - 1, -1)
+                        break
                     if total_resolved >= expected_images:
                         new_images = strict_ready; break
                     if (max_prog >= 100) and not any_busy and (len(relaxed_ready) + total_blocked > 0):
+                        if total_blocked >= expected_images:
+                            prompt_blocked_count = total_blocked
+                            if on_gen_progress: on_gen_progress(done - 1, -1)
+                            break
                         new_images = strict_ready if strict_ready else relaxed_ready; break
                     
                     # Káº¹t lÃ¢u quÃ¡ thÃ¬ láº¥y áº£nh hiá»‡n cÃ³
-                    if (time.time() - last_change_time) > STABLE_WAIT and (len(relaxed_ready) + total_blocked > 0):
+                    if (time.time() - last_change_time) > STABLE_WAIT and len(relaxed_ready) > 0:
                         new_images = relaxed_ready; break
 
                     time.sleep(1)
+
+                if prompt_blocked_count >= expected_images and not new_images:
+                    log_fn(f"   Skipping prompt: Google blocked {prompt_blocked_count}/{expected_images} output card(s).")
+                    continue
 
                 # Fallback láº§n cuá»‘i
                 if not new_images:
