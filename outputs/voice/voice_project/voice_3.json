@@ -1,0 +1,13 @@
+{
+  "provider": "edge-tts",
+  "voice": "vi-VN-NamMinhNeural",
+  "speed": 1.2,
+  "rate": "+20%",
+  "pitch": "+0Hz",
+  "volume": "+0%",
+  "notes": "Edge TTS applies voice, speed/rate, pitch, and volume.",
+  "chars": 3644,
+  "script_path": "outputs\\voice\\voice_project\\script_3.txt",
+  "audio_path": "outputs\\voice\\voice_project\\audio_3.mp3",
+  "subtitle_path": "outputs\\voice\\voice_project\\sub_3.srt"
+}

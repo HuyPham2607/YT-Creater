@@ -27,6 +27,7 @@ FLOW_URL      = "https://labs.google/fx/tools/flow"
 CDP_ENDPOINT  = "http://127.0.0.1:9222"
 GEN_TIMEOUT   = 180
 STABLE_WAIT   = 3
+PARTIAL_RESULT_WAIT = 20
 BETWEEN_DELAY = 2
 RX_FLOW_HELPER_DIR = str(Path(__file__).resolve().parents[1] / "extensions" / "rx-flow-helper")
 PROJECT_CREATE_LOCK = threading.Lock()
@@ -51,19 +52,20 @@ def find_chrome_path():
             if os.path.exists(p): return p
     return None
 
-def ensure_chrome_running(log_fn):
-    if is_port_open("127.0.0.1", 9222):
-        log_fn("Chrome debug is ready.")
+def ensure_chrome_running(log_fn, port: int = 9222, profile_dir: str | None = None):
+    profile_dir = profile_dir or PROFILE_DIR
+    if is_port_open("127.0.0.1", port):
+        log_fn(f"Chrome debug is ready on port {port}.")
         return True
-    log_fn("Starting Chrome debug profile...")
+    log_fn(f"Starting Chrome debug profile on port {port}...")
     chrome_exe = find_chrome_path()
     if not chrome_exe:
         log_fn("ERROR Chrome executable not found.")
         return False
-    os.makedirs(PROFILE_DIR, exist_ok=True)
+    os.makedirs(profile_dir, exist_ok=True)
     cmd = [
-        chrome_exe, "--remote-debugging-port=9222", "--remote-allow-origins=*",
-        f"--user-data-dir={PROFILE_DIR}", "--no-first-run", "--no-default-browser-check",
+        chrome_exe, f"--remote-debugging-port={port}", "--remote-allow-origins=*",
+        f"--user-data-dir={profile_dir}", "--no-first-run", "--no-default-browser-check",
     ]
     if os.path.exists(RX_FLOW_HELPER_DIR):
         cmd.append(f"--load-extension={RX_FLOW_HELPER_DIR}")
@@ -72,11 +74,11 @@ def ensure_chrome_running(log_fn):
     subprocess.Popen(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
     for _ in range(10):
         time.sleep(1)
-        if is_port_open("127.0.0.1", 9222):
+        if is_port_open("127.0.0.1", port):
             log_fn("Chrome started.")
             time.sleep(2)
             return True
-    log_fn("ERROR Chrome debug port did not open after 10 seconds.")
+    log_fn(f"ERROR Chrome debug port {port} did not open after 10 seconds.")
     return False
 
 
@@ -114,7 +116,7 @@ IMAGE_SCAN_JS = r"""
             const imgs = Array.from(container.querySelectorAll('img, video'))
                 .filter(img => img.src && !img.src.startsWith('data:image/svg') && !img.src.includes('.svg') && !img.src.includes('googleusercontent.com'));
             const busyEl = container.querySelector(
-                '.generating, .is-generating, [aria-busy="true"], [class*="spinner"], g-progress-circular'
+                '.generating, .is-generating, [aria-busy="true"], [class*="spinner"], [role="progressbar"], g-progress-circular'
             );
 
             // Äáº¾M sá»‘ lÆ°á»£ng áº£nh bá»‹ cháº·n trong container NÃ€Y
@@ -190,14 +192,36 @@ IMAGE_SCAN_JS = r"""
                 }
             }
 
-            // Progress
-            let progress = 0;
-            const pctMatch = container.innerText.match(/(\d+)%/);
-            if (pctMatch) progress = parseInt(pctMatch[1]);
-            else if (busyEl) {
-                const av = busyEl.getAttribute('aria-valuenow');
-                if (av) progress = parseInt(av);
-            }
+            // Progress. Flow may render the visible percent outside innerText
+            // or expose it only through progressbar aria attributes.
+            const readProgress = (root) => {
+                if (!root) return 0;
+                let best = 0;
+                const considerText = (text) => {
+                    const matches = String(text || '').matchAll(/\b(\d{1,3})\s*%/g);
+                    for (const match of matches) {
+                        const value = parseInt(match[1], 10);
+                        if (value >= 0 && value <= 100 && value > best) best = value;
+                    }
+                };
+                considerText(root.innerText || root.textContent || '');
+                const nodes = [root, ...Array.from(root.querySelectorAll('[role="progressbar"], [aria-valuenow], [aria-valuetext], [aria-label], g-progress-circular'))];
+                nodes.forEach(el => {
+                    ['aria-valuenow', 'aria-valuetext', 'aria-label', 'title'].forEach(attr => {
+                        const raw = el.getAttribute && el.getAttribute(attr);
+                        if (!raw) return;
+                        if (attr === 'aria-valuenow') {
+                            const value = parseInt(raw, 10);
+                            if (value >= 0 && value <= 100 && value > best) best = value;
+                        } else {
+                            considerText(raw);
+                        }
+                    });
+                });
+                return best;
+            };
+            let progress = readProgress(container);
+            if (progress === 0 && busyEl) progress = readProgress(document.body);
 
             const imageData = imgs.map(img => {
                 const style = window.getComputedStyle(img);
@@ -1495,6 +1519,13 @@ def run_auto(
     reference_dir: str = None,
     manual_reference_paths: list[list[str]] = None,
     worker_id: int = 1,
+    cdp_endpoint: str = None,
+    chrome_port: int = 9222,
+    profile_dir: str = None,
+    project_url: str = None,
+    on_project_ready=None,
+    on_run_error=None,
+    project_create_retries: int = 2,
 ) -> list[str]:
     saved = []
     uploaded_reference_keys = set()
@@ -1502,17 +1533,27 @@ def run_auto(
 
     try:
         with CHROME_START_LOCK:
-            if not ensure_chrome_running(log_fn): return []
+            if not ensure_chrome_running(log_fn, port=chrome_port, profile_dir=profile_dir): return []
 
         final_save_dir = os.path.join(save_dir, task_name) if task_name else save_dir
         os.makedirs(final_save_dir, exist_ok=True)
 
         with sync_playwright() as p:
-            browser = p.chromium.connect_over_cdp(CDP_ENDPOINT)
+            endpoint = cdp_endpoint or f"http://127.0.0.1:{chrome_port}"
+            browser = p.chromium.connect_over_cdp(endpoint)
             context = browser.contexts[0]
 
             page = None
-            if not new_project_each_run:
+            if project_url:
+                page = context.new_page()
+                log_fn(f"   Worker {worker_id}: opening assigned project.")
+                page.goto(project_url, wait_until="domcontentloaded", timeout=30000)
+                if not wait_for_project_page(page, log_fn, timeout=15):
+                    log_fn("   WARN assigned project did not load; will create a replacement project.")
+                    project_url = None
+                    new_project_each_run = True
+
+            if not page and not new_project_each_run:
                 for ep in context.pages:
                     if "labs.google" in ep.url and "flow" in ep.url:
                         page = ep
@@ -1531,14 +1572,36 @@ def run_auto(
                 if new_project_each_run:
                     page.goto(FLOW_URL, wait_until="domcontentloaded", timeout=30000)
                     time.sleep(2)
-                project_page = enter_project(page, log_fn, force_new=new_project_each_run, worker_id=worker_id)
+                project_page = None
+                for attempt in range(max(1, project_create_retries)):
+                    if attempt:
+                        log_fn(f"   Retrying project entry/create ({attempt + 1}/{project_create_retries})...")
+                        try:
+                            page.goto(FLOW_URL, wait_until="domcontentloaded", timeout=30000)
+                        except Exception:
+                            pass
+                        time.sleep(2)
+                    project_page = enter_project(page, log_fn, force_new=new_project_each_run, worker_id=worker_id)
+                    if project_page:
+                        break
                 if not project_page:
-                    log_fn("ERROR could not enter a Flow project."); return []
+                    log_fn("ERROR could not enter a Flow project.")
+                    if on_run_error:
+                        try:
+                            on_run_error("project_error")
+                        except Exception:
+                            pass
+                    return []
                 page = project_page
             else:
                 log_fn("   Existing tab is already in a project.")
 
             log_fn(f"Worker {worker_id} project URL: {page.url}")
+            if on_project_ready and "/project/" in page.url:
+                try:
+                    on_project_ready(worker_id, page.url)
+                except Exception:
+                    pass
             time.sleep(2)
 
             setup_flow_options(page, expected_images, aspect_ratio, model, output_type, seed, log_fn)
@@ -1666,6 +1729,7 @@ def run_auto(
                 last_logged_blocked = 0
                 last_card_debug_time = 0
                 last_change_time   = time.time()
+                last_resolved_count = 0
                 prompt_blocked_count = 0
 
                 while time.time() < timeout_at:
@@ -1749,21 +1813,37 @@ def run_auto(
 
                     # ThoÃ¡t khi Ä‘á»§ áº£nh hoáº·c Ä‘áº¡t 100%
                     total_resolved = len(strict_ready) + total_blocked
+                    relaxed_resolved = len(relaxed_ready) + total_blocked
+                    observed_resolved = max(total_resolved, relaxed_resolved)
+                    if observed_resolved > last_resolved_count:
+                        log_fn(f"   Resolved output card(s): {observed_resolved}/{expected_images}")
+                        last_resolved_count = observed_resolved
+                        last_change_time = time.time()
+
                     if total_blocked >= expected_images:
                         prompt_blocked_count = total_blocked
                         if on_gen_progress: on_gen_progress(done - 1, -1)
                         break
                     if total_resolved >= expected_images:
                         new_images = strict_ready; break
-                    if (max_prog >= 100) and not any_busy and (len(relaxed_ready) + total_blocked > 0):
+                    if relaxed_resolved >= expected_images and not any_busy:
+                        new_images = relaxed_ready; break
+                    if (max_prog >= 100) and not any_busy and relaxed_resolved > 0:
                         if total_blocked >= expected_images:
                             prompt_blocked_count = total_blocked
                             if on_gen_progress: on_gen_progress(done - 1, -1)
                             break
-                        new_images = strict_ready if strict_ready else relaxed_ready; break
+                        if (time.time() - last_change_time) > PARTIAL_RESULT_WAIT:
+                            new_images = strict_ready if strict_ready else relaxed_ready
+                            break
                     
-                    # Káº¹t lÃ¢u quÃ¡ thÃ¬ láº¥y áº£nh hiá»‡n cÃ³
-                    if (time.time() - last_change_time) > STABLE_WAIT and len(relaxed_ready) > 0:
+                    # Káº¹t lÃ¢u quÃ¡ thÃ¬ láº¥y áº£nh hiá»‡n cÃ³, nhÆ°ng chá»‰ sau khi Ä‘Ã£ chá»
+                    # Ä‘á»§ lÃ¢u cho cÃ¡c card trong batch 3x/4x load xong.
+                    if (
+                        not any_busy and
+                        len(relaxed_ready) > 0 and
+                        (time.time() - last_change_time) > PARTIAL_RESULT_WAIT
+                    ):
                         new_images = relaxed_ready; break
 
                     time.sleep(1)
@@ -1800,7 +1880,12 @@ def run_auto(
 
     except Exception as e:
         log_fn(f"\nERROR: {e}")
-        log_fn("Chrome must be running with --remote-debugging-port=9222")
+        if on_run_error:
+            try:
+                on_run_error(str(e))
+            except Exception:
+                pass
+        log_fn(f"Chrome must be running with --remote-debugging-port={chrome_port}")
 
     return saved
 

@@ -1,7 +1,9 @@
 import os
+import json
 import subprocess
 import sys
 import threading
+from pathlib import Path
 
 from PyQt6.QtCore import Qt, QThread, pyqtSignal
 from PyQt6.QtGui import QColor, QPixmap
@@ -33,6 +35,15 @@ try:
     ENGINE_OK = True
 except ImportError:
     ENGINE_OK = False
+
+
+REPO_ROOT = Path(__file__).resolve().parents[1]
+PROJECT_POOL_PATH = REPO_ROOT / "data" / "glabs_project_pool.json"
+ACCOUNT_PROFILES = [
+    {"name": "acc1", "port": 9222, "profile_dir": str(Path.home() / "ChromeGLabsProfile_acc1")},
+    {"name": "acc2", "port": 9223, "profile_dir": str(Path.home() / "ChromeGLabsProfile_acc2")},
+    {"name": "acc3", "port": 9224, "profile_dir": str(Path.home() / "ChromeGLabsProfile_acc3")},
+]
 
 
 class ClickableImageLabel(QLabel):
@@ -128,6 +139,7 @@ class GLabsAutomationTab(QWidget):
         self.engine_thread = None
         self.is_running = False
         self.manual_references = {}
+        self.project_pool_lock = threading.Lock()
         self._setup_ui()
         self._connect_signals()
         self._refresh_prompt_count()
@@ -138,6 +150,7 @@ class GLabsAutomationTab(QWidget):
         self.btn_choose_out.clicked.connect(lambda: self._choose_dir(self.txt_out_dir))
         self.btn_run.clicked.connect(self._start_engine)
         self.btn_clear.clicked.connect(self._clear_inputs)
+        self.btn_open_account.clicked.connect(self._open_selected_account)
         self.txt_prompts.textChanged.connect(self._refresh_prompt_count)
         self.cmb_model.currentTextChanged.connect(lambda: self._sync_queue_preview() if not self.is_running else None)
         self.cmb_ratio.currentTextChanged.connect(lambda: self._sync_queue_preview() if not self.is_running else None)
@@ -241,6 +254,14 @@ class GLabsAutomationTab(QWidget):
         self.txt_delay_max = QLineEdit("10 s")
         self.cmb_ref_mode = QComboBox()
         self.cmb_ref_mode.addItems(["Default", "Manual per row", "Auto match"])
+        self.cmb_accounts = QComboBox()
+        self.cmb_accounts.addItems(["1 account", "2 accounts", "3 accounts"])
+        self.cmb_login_account = QComboBox()
+        self.cmb_login_account.addItems([a["name"] for a in ACCOUNT_PROFILES])
+        self.btn_open_account = QPushButton("Open login")
+        self.chk_reuse_project_pool = QCheckBox("Reuse project pool")
+        self.chk_reuse_project_pool.setChecked(True)
+        self.chk_reset_project_pool = QCheckBox("Reset pool")
         grid.addWidget(self._field_label("Concurrent runs"), 4, 0)
         grid.addWidget(self.txt_concurrency, 5, 0)
         grid.addWidget(self._field_label("Delay between runs"), 4, 1)
@@ -251,7 +272,16 @@ class GLabsAutomationTab(QWidget):
         grid.addLayout(delay_row, 5, 1)
         grid.addWidget(self._field_label("Reference mode"), 6, 0)
         grid.addWidget(self.cmb_ref_mode, 7, 0)
+        grid.addWidget(self._field_label("Accounts"), 6, 1)
+        grid.addWidget(self.cmb_accounts, 7, 1)
         prompt_lay.addLayout(grid)
+
+        account_row = QHBoxLayout()
+        account_row.addWidget(self.cmb_login_account, 1)
+        account_row.addWidget(self.btn_open_account, 1)
+        account_row.addWidget(self.chk_reuse_project_pool, 1)
+        account_row.addWidget(self.chk_reset_project_pool, 1)
+        prompt_lay.addLayout(account_row)
 
         self.chk_seed = QCheckBox("Lock seed")
         self.txt_seed = QLineEdit()
@@ -601,6 +631,74 @@ class GLabsAutomationTab(QWidget):
         if dir_path:
             line_edit.setText(dir_path)
 
+    def _open_selected_account(self):
+        account = self.cmb_login_account.currentText()
+        script = REPO_ROOT / "launch_glabs_account.py"
+        try:
+            subprocess.Popen([sys.executable, str(script), account], cwd=str(REPO_ROOT))
+            self.lbl_run_status.setText(f"Opening {account} login profile")
+        except Exception as exc:
+            QMessageBox.warning(self, "Open account failed", str(exc))
+
+    def _task_key(self, task_name):
+        key = (task_name or "default").strip().lower()
+        return "".join(ch if ch.isalnum() or ch in "-_" else "-" for ch in key).strip("-") or "default"
+
+    def _load_project_pool(self):
+        try:
+            if PROJECT_POOL_PATH.exists():
+                with open(PROJECT_POOL_PATH, "r", encoding="utf-8") as handle:
+                    return json.load(handle)
+        except Exception as exc:
+            print(f"Could not load project pool: {exc}")
+        return {}
+
+    def _save_project_pool(self, pool):
+        try:
+            PROJECT_POOL_PATH.parent.mkdir(parents=True, exist_ok=True)
+            with open(PROJECT_POOL_PATH, "w", encoding="utf-8") as handle:
+                json.dump(pool, handle, indent=2, ensure_ascii=False)
+        except Exception as exc:
+            print(f"Could not save project pool: {exc}")
+
+    def _account_for_worker(self, worker_idx, worker_count, account_count):
+        account_count = max(1, min(account_count, len(ACCOUNT_PROFILES)))
+        index = min(account_count - 1, (worker_idx * account_count) // max(1, worker_count))
+        return ACCOUNT_PROFILES[index]
+
+    def _project_pool_assignments(self, task_name, worker_count, account_count, reset_pool=False):
+        task_key = self._task_key(task_name)
+        with self.project_pool_lock:
+            pool = self._load_project_pool()
+            if reset_pool and task_key in pool:
+                pool.pop(task_key, None)
+                self._save_project_pool(pool)
+            task_pool = pool.setdefault(task_key, {"task_name": task_name, "workers": {}})
+
+            assignments = []
+            for worker_idx in range(worker_count):
+                worker_id = worker_idx + 1
+                account = self._account_for_worker(worker_idx, worker_count, account_count)
+                saved = task_pool.get("workers", {}).get(str(worker_id), {})
+                project_url = saved.get("project_url") if saved.get("account") == account["name"] else None
+                assignments.append({
+                    "worker_id": worker_id,
+                    "account": account,
+                    "project_url": project_url,
+                    "task_key": task_key,
+                })
+            return assignments
+
+    def _remember_project_url(self, task_key, worker_id, account_name, project_url):
+        if not project_url:
+            return
+        with self.project_pool_lock:
+            pool = self._load_project_pool()
+            task_pool = pool.setdefault(task_key, {"task_name": task_key, "workers": {}})
+            workers = task_pool.setdefault("workers", {})
+            workers[str(worker_id)] = {"account": account_name, "project_url": project_url}
+            self._save_project_pool(pool)
+
     def _start_engine(self):
         if not ENGINE_OK:
             QMessageBox.critical(self, "Engine missing", "Cannot load ui/glabs_engine.py.")
@@ -616,9 +714,14 @@ class GLabsAutomationTab(QWidget):
         except ValueError:
             expected_images = 2
         try:
-            worker_count = max(1, min(3, int(self.txt_concurrency.text().strip())))
+            worker_count = max(1, min(5, int(self.txt_concurrency.text().strip())))
         except ValueError:
             worker_count = 1
+        try:
+            account_count = int(self.cmb_accounts.currentText().split()[0])
+        except ValueError:
+            account_count = 1
+        account_count = max(1, min(account_count, worker_count, len(ACCOUNT_PROFILES)))
 
         task_name = os.path.basename(self.txt_out_dir.text().strip())
         if not task_name or task_name == "glabs_images":
@@ -638,8 +741,30 @@ class GLabsAutomationTab(QWidget):
             "reference_dir": self.txt_ref_dir.text().strip(),
             "manual_reference_paths": [self.manual_references.get(i, []) for i in range(len(prompts))],
             "worker_count": worker_count,
-            "new_project_each_run": worker_count > 1,
+            "account_count": account_count,
+            "project_pool_enabled": self.chk_reuse_project_pool.isChecked(),
+            "reset_project_pool": self.chk_reset_project_pool.isChecked(),
+            "new_project_each_run": False,
         }
+        if config["project_pool_enabled"]:
+            config["project_assignments"] = self._project_pool_assignments(
+                task_name,
+                worker_count,
+                account_count,
+                reset_pool=config["reset_project_pool"],
+            )
+            config["remember_project_url"] = self._remember_project_url
+        else:
+            task_key = self._task_key(task_name)
+            config["project_assignments"] = [
+                {
+                    "worker_id": worker_idx + 1,
+                    "account": self._account_for_worker(worker_idx, worker_count, account_count),
+                    "project_url": None,
+                    "task_key": task_key,
+                }
+                for worker_idx in range(worker_count)
+            ]
 
         self._sync_queue_preview(config)
         start_row_idx = 0
@@ -817,6 +942,9 @@ class GLabsAutomationTab(QWidget):
         if percent == -1:
             label.setText("Blocked")
             label.setStyleSheet("color:#FF6B7A; font-weight:700;")
+        elif percent == -2:
+            label.setText("Failed")
+            label.setStyleSheet("color:#FF6B7A; font-weight:700;")
         elif percent >= 100:
             label.setText("Done")
             label.setStyleSheet("color:#42E6A4; font-weight:700;")
@@ -856,15 +984,46 @@ class EngineThread(QThread):
     def run(self):
         worker_count = max(1, int(self.config.get("worker_count", 1) or 1))
         worker_count = min(worker_count, len(self.config.get("prompts", [])) or 1)
+        assignments = self.config.get("project_assignments") or []
+        remember_project_url = self.config.get("remember_project_url")
+
+        def strip_thread_keys(config):
+            for key in [
+                "worker_count", "account_count", "project_pool_enabled", "reset_project_pool",
+                "project_assignments", "remember_project_url",
+            ]:
+                config.pop(key, None)
+
+        def apply_assignment(config, worker_idx):
+            if not assignments or worker_idx >= len(assignments):
+                return
+            assignment = assignments[worker_idx]
+            account = assignment["account"]
+            config["worker_id"] = assignment["worker_id"]
+            config["chrome_port"] = account["port"]
+            config["cdp_endpoint"] = f"http://127.0.0.1:{account['port']}"
+            config["profile_dir"] = account["profile_dir"]
+            config["project_url"] = assignment.get("project_url")
+            config["new_project_each_run"] = not bool(assignment.get("project_url"))
+            if remember_project_url:
+                task_key = assignment["task_key"]
+                worker_id = assignment["worker_id"]
+                account_name = account["name"]
+                config["on_project_ready"] = lambda wid, url, tk=task_key, an=account_name: remember_project_url(tk, wid or worker_id, an, url)
 
         if worker_count <= 1:
             config = dict(self.config)
-            config.pop("worker_count", None)
+            strip_thread_keys(config)
+            apply_assignment(config, 0)
             config["on_gen_start"] = lambda idx, prompt: self.status_signal.emit(
                 self.start_row_idx + idx, "Starting"
             )
             config["on_gen_progress"] = lambda idx, pct: self.progress_signal.emit(self.start_row_idx + idx, pct)
             config["on_image_saved"] = lambda idx, fp: self.image_signal.emit(self.start_row_idx + idx, fp)
+            config["on_run_error"] = lambda msg: [
+                self.progress_signal.emit(self.start_row_idx + i, -2)
+                for i in range(len(config.get("prompts", [])))
+            ]
             run_auto(**config, log_fn=print)
             self.finished_signal.emit()
             return
@@ -884,11 +1043,13 @@ class EngineThread(QThread):
             local_refs = [job[2] for job in jobs]
             global_indices = [job[0] for job in jobs]
             config = dict(self.config)
-            config.pop("worker_count", None)
+            strip_thread_keys(config)
             config["prompts"] = local_prompts
             config["manual_reference_paths"] = local_refs
-            config["new_project_each_run"] = True
-            config["worker_id"] = worker_idx + 1
+            apply_assignment(config, worker_idx)
+            if not assignments:
+                config["new_project_each_run"] = True
+                config["worker_id"] = worker_idx + 1
             config["on_gen_start"] = lambda idx, prompt: self.status_signal.emit(
                 self.start_row_idx + global_indices[idx], f"Worker {worker_idx + 1}"
             )
@@ -898,6 +1059,10 @@ class EngineThread(QThread):
             config["on_image_saved"] = lambda idx, fp: self.image_signal.emit(
                 self.start_row_idx + global_indices[idx], fp
             )
+            config["on_run_error"] = lambda msg: [
+                self.progress_signal.emit(self.start_row_idx + global_idx, -2)
+                for global_idx in global_indices
+            ]
             try:
                 run_auto(**config, log_fn=lambda msg: print(f"[W{worker_idx + 1}] {msg}"))
             except Exception as exc:

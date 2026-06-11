@@ -13,6 +13,7 @@ from ui.tab_metadata import VideoMetadataTab
 from ui.tab_qc import UploadQCTab
 from ui.tab_profile import ProfileManagerTab
 from ui.tab_glabs import GLabsAutomationTab # <--- IMPORT TAB G-LABS
+from ui.tab_voice import VoiceGeneratorTab
 
 # =======================================================
 # HÃ€M TRá»¢ GIÃšP: Táº¡o ra má»™t Frame cÃ³ kháº£ nÄƒng nháº­n Click
@@ -85,7 +86,7 @@ class MainWindow(QMainWindow):
         menus = [
             "0 Topic Ideator", "1 Script Writer", "2 Scene Breakdown", 
             "3 Asset Prompts", "4 Camera Movement", "5 Thumbnail", 
-            "6 Video Metadata", "7 Upload QC", "8 G-Labs Auto"
+            "6 Video Metadata", "7 Upload QC", "8 G-Labs Auto", "9 Voice TTS"
         ]
         
         for idx, title in enumerate(menus):
@@ -126,6 +127,7 @@ class MainWindow(QMainWindow):
         self.tab_thumb = ThumbnailTab()
         self.tab_meta = VideoMetadataTab()
         self.tab_qc = UploadQCTab()
+        self.tab_voice = VoiceGeneratorTab()
 
         self.content_area.addWidget(self.tab_topic)        # Index 0
         self.content_area.addWidget(self.tab_script)       # Index 1
@@ -139,10 +141,11 @@ class MainWindow(QMainWindow):
         # --- Náº P TAB G-LABS VÃ€O ÄÃšNG INDEX 8 ---
         self.tab_glabs = GLabsAutomationTab()
         self.content_area.addWidget(self.tab_glabs)           # Index 8
+        self.content_area.addWidget(self.tab_voice)           # Index 9
         
-        # Náº¡p trang Profile Manager (Sáº½ á»Ÿ Index 9, khÃ´ng náº±m trong Menu chÃ­nh)
+        # Náº¡p trang Profile Manager (Sáº½ á»Ÿ Index 10, khÃ´ng náº±m trong Menu chÃ­nh)
         self.page_profile = ProfileManagerTab()
-        self.content_area.addWidget(self.page_profile)        # Index 9
+        self.content_area.addWidget(self.page_profile)        # Index 10
 
         # Káº¾T Ná»I Sá»° KIá»†N ÃP Dá»¤NG PROFILE
         self.page_profile.profile_applied.connect(self.on_profile_applied)
