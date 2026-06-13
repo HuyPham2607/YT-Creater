@@ -1,7 +1,5 @@
-import hashlib
 import json
 import os
-from datetime import datetime, timezone
 from pathlib import Path
 try:
     from google import genai
@@ -12,12 +10,15 @@ except ImportError:
 from dotenv import load_dotenv
 from PyQt6.QtCore import QThread, pyqtSignal
 from threads.gemini_retry import generate_content_with_retries
+from core.profile_context import (
+    channel_context_user_note,
+    get_or_create_shared_cache,
+    worker_channel_fields,
+)
 
 load_dotenv()
 
 PROJECT_ROOT = Path(__file__).parent.parent
-SCRIPT_CACHE_INDEX_PATH = PROJECT_ROOT / "data" / "gemini_script_cache_index.json"
-GEMINI_CACHE_TTL_SECONDS = int(os.getenv("GEMINI_CACHE_TTL_SECONDS", "3600"))
 
 
 # ============================================================
@@ -128,111 +129,12 @@ def _list_to_lines(items, prefix="- "):
     return "\n".join(f"{prefix}{str(item).strip()}" for item in items if str(item).strip())
 
 
-def _clip_context(value, max_chars):
-    value = (value or "").strip()
-    if len(value) <= max_chars:
-        return value
-    return value[:max_chars] + "\n...[TRUNCATED]"
-
-
-def _load_script_cache_index():
-    if not SCRIPT_CACHE_INDEX_PATH.exists():
-        return {}
-    try:
-        with open(SCRIPT_CACHE_INDEX_PATH, "r", encoding="utf-8") as file:
-            return json.load(file)
-    except (OSError, json.JSONDecodeError):
-        return {}
-
-
-def _save_script_cache_index(index):
-    SCRIPT_CACHE_INDEX_PATH.parent.mkdir(parents=True, exist_ok=True)
-    with open(SCRIPT_CACHE_INDEX_PATH, "w", encoding="utf-8") as file:
-        json.dump(index, file, ensure_ascii=False, indent=2)
-
-
-def _script_cache_key(model_name, context):
-    payload = f"{model_name}\n{context}".encode("utf-8")
-    return hashlib.sha256(payload).hexdigest()
-
-
-def _is_cache_metadata_usable(cache):
-    expire_time = getattr(cache, "expire_time", None) or getattr(cache, "expireTime", None)
-    if not expire_time:
-        return True
-    if isinstance(expire_time, str):
-        try:
-            expire_time = datetime.fromisoformat(expire_time.replace("Z", "+00:00"))
-        except ValueError:
-            return True
-    if expire_time.tzinfo is None:
-        expire_time = expire_time.replace(tzinfo=timezone.utc)
-    return expire_time > datetime.now(timezone.utc)
-
-
-def build_script_cache_context(config):
-    dna_content = _clip_context(config.get("dna_content"), 16000)
-    style_content = _clip_context(config.get("style_content"), 16000)
-    context_blocks = []
-
-    if dna_content:
-        context_blocks.append(f"""--- CHANNEL DNA ---
-{dna_content}
-
-Use this as the channel's strategic identity: viewer promise, pacing, worldview, recurring logic, and emotional contract.""")
-
-    if style_content:
-        context_blocks.append(f"""--- CHANNEL STYLE GUIDE ---
-{style_content}
-
-Apply this to word choice, sentence length, tone, forbidden phrases, rhythm, and output language.""")
-
-    if not context_blocks:
-        return ""
-
-    return "SCRIPT WRITER CACHED CHANNEL CONTEXT\n\n" + "\n\n".join(context_blocks)
-
-
-def get_or_create_script_cache(client, model_name, context):
-    if not context.strip() or types is None:
-        return None
-
-    key = _script_cache_key(model_name, context)
-    index = _load_script_cache_index()
-    cached = index.get(key)
-
-    if cached and cached.get("name"):
-        try:
-            cache = client.caches.get(name=cached["name"])
-            if _is_cache_metadata_usable(cache):
-                client.caches.update(
-                    name=cached["name"],
-                    config=types.UpdateCachedContentConfig(ttl=f"{GEMINI_CACHE_TTL_SECONDS}s")
-                )
-                print(f"✅ [SCRIPT_WORKER] Gemini cache HIT: {cached['name']}")
-                return cached["name"]
-        except Exception as error:
-            print(f"⚠️ [SCRIPT_WORKER] Cached content invalid, recreating: {error}")
-
-    cache = client.caches.create(
-        model=model_name,
-        config=types.CreateCachedContentConfig(
-            displayName=f"yt-creater-script-{key[:12]}",
-            contents=context,
-            ttl=f"{GEMINI_CACHE_TTL_SECONDS}s"
-        )
-    )
-    cache_name = cache.name
-    index[key] = {
-        "name": cache_name,
-        "model": model_name,
-        "display_name": f"yt-creater-script-{key[:12]}",
-        "context_hash": key,
-        "updated_at": datetime.now(timezone.utc).isoformat()
+def _profile_from_config(config):
+    return {
+        "dna_content": config.get("dna_content", ""),
+        "style_content": config.get("style_content", ""),
+        "name": config.get("name", ""),
     }
-    _save_script_cache_index(index)
-    print(f"✅ [SCRIPT_WORKER] Gemini cache CREATED: {cache_name}")
-    return cache_name
 
 
 def _title_options_to_lines(titles):
@@ -1319,33 +1221,33 @@ class ScriptWorker(QThread):
                 + (" (có research)" if has_research else "") + "..."
             )
 
-            profile_context = build_script_cache_context(self.config)
+            profile = _profile_from_config(self.config)
+            channel_fields = worker_channel_fields("script", profile)
 
             def build_script_request(model_name):
                 cached_content_name = None
-                prompt_config = self.config
-                if profile_context:
-                    try:
-                        cached_content_name = get_or_create_script_cache(
-                            client,
-                            model_name,
-                            profile_context,
-                        )
-                        if cached_content_name:
-                            prompt_config = dict(self.config)
-                            prompt_config["dna_content"] = ""
-                            prompt_config["style_content"] = ""
-                    except Exception as cache_error:
-                        print(f"⚠️ [SCRIPT_WORKER] Gemini cache unavailable, using full prompt: {cache_error}")
+                prompt_config = dict(self.config)
+                prompt_config["dna_content"] = channel_fields["dna_text"]
+                prompt_config["style_content"] = channel_fields["style_text"]
+
+                try:
+                    cached_content_name = get_or_create_shared_cache(
+                        client,
+                        model_name,
+                        profile,
+                        log_prefix="SCRIPT_WORKER",
+                    )
+                    if cached_content_name:
+                        prompt_config["dna_content"] = ""
+                        prompt_config["style_content"] = ""
+                except Exception as cache_error:
+                    print(f"⚠️ [SCRIPT_WORKER] Shared cache unavailable: {cache_error}")
 
                 system_prompt, user_prompt = build_prompts(prompt_config)
+                if channel_fields.get("worker_focus"):
+                    user_prompt = channel_fields["worker_focus"] + "\n\n" + user_prompt
                 if cached_content_name:
-                    user_prompt += """
-
-CHANNEL CONTEXT NOTE:
-The channel DNA and style guide are provided through cached content attached to this request.
-Apply that cached channel context fully, even though it is not repeated verbatim in this prompt.
-"""
+                    user_prompt += channel_context_user_note()
 
                 gen_config_kwargs = {
                     "system_instruction": system_prompt,

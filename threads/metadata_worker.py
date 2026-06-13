@@ -13,6 +13,11 @@ except ImportError:
     types = None
 
 from threads.gemini_retry import generate_content_with_retries
+from core.profile_context import (
+    build_worker_focus_block,
+    channel_context_user_note,
+    get_or_create_shared_cache,
+)
 
 load_dotenv()
 
@@ -29,13 +34,6 @@ Critical rules:
 6. Do not keyword-stuff. Keywords must read naturally.
 7. Return valid JSON only. No markdown outside JSON.
 """
-
-
-def _clip(text, limit=14000):
-    text = (text or "").strip()
-    if len(text) <= limit:
-        return text
-    return text[:limit] + "\n...[TRUNCATED]..."
 
 
 def _extract_json(text):
@@ -129,15 +127,11 @@ Thumbnail concept/text:
 Use this as the ONLY source of market/keyword evidence:
 {config.get("seo_notes") or "No user SEO research notes provided."}
 
-=== CHANNEL DNA / STYLE GUIDE ===
-DNA:
-{_clip(config.get("dna_content") or "", 9000)}
-
-Style guide:
-{_clip(config.get("style_guide") or "", 5000)}
+=== CHANNEL DNA / STYLE GUIDE (WORKER FOCUS) ===
+{config.get("worker_focus") or "Not provided"}
 
 === FINAL SCRIPT ===
-{_clip(config.get("script") or "", 18000)}
+{(config.get("script") or "Not provided").strip()}
 """
 
 
@@ -159,17 +153,43 @@ class MetadataWorker(QThread):
                 raise ValueError("GEMINI_API_KEY not found in .env.")
 
             client = genai.Client(api_key=api_key)
-            gen_config = types.GenerateContentConfig(
-                system_instruction=METADATA_SYSTEM,
-                temperature=0.55,
-                response_mime_type="application/json",
-            )
+            profile = {
+                "dna_content": self.config.get("dna_content", ""),
+                "style_content": self.config.get("style_guide") or self.config.get("style_content", ""),
+            }
+            self.config["worker_focus"] = build_worker_focus_block("metadata", profile)
+
+            def build_metadata_request(model_name):
+                cached_name = None
+                try:
+                    cached_name = get_or_create_shared_cache(
+                        client,
+                        model_name,
+                        profile,
+                        log_prefix="METADATA",
+                    )
+                except Exception as cache_error:
+                    print(f"⚠️ [METADATA] Shared cache unavailable: {cache_error}")
+
+                user_prompt = build_metadata_prompt(self.config)
+                if cached_name:
+                    user_prompt += channel_context_user_note()
+
+                gen_kwargs = {
+                    "system_instruction": METADATA_SYSTEM,
+                    "temperature": 0.55,
+                    "response_mime_type": "application/json",
+                }
+                if cached_name:
+                    gen_kwargs["cachedContent"] = cached_name
+                return {
+                    "contents": user_prompt,
+                    "config": types.GenerateContentConfig(**gen_kwargs),
+                }
+
             response, _ = generate_content_with_retries(
                 client=client,
-                build_request=lambda model_name: {
-                    "contents": build_metadata_prompt(self.config),
-                    "config": gen_config,
-                },
+                build_request=build_metadata_request,
                 progress_callback=self.progress_signal.emit,
                 log_prefix="METADATA",
             )

@@ -3,14 +3,16 @@ from PyQt6.QtWidgets import (QWidget, QVBoxLayout, QHBoxLayout, QLabel,
                              QComboBox, QScrollArea, QFrame, QSplitter,
                              QInputDialog, QMessageBox, QTableWidget,
                              QTableWidgetItem, QHeaderView, QTabBar,
-                             QStackedWidget, QApplication)
+                             QStackedWidget, QApplication, QFileDialog)
 from PyQt6.QtCore import Qt, pyqtSignal
 from PyQt6.QtGui import QCursor, QColor, QBrush, QFont
 from ui.components import DropZoneWidget
+import csv
 import json
 import os
 import re
 from threads.scene_worker import SceneWorker
+from core.profile_store import load_active_profile
 
 
 # ══════════════════════════════════════════════════════════════════════
@@ -826,11 +828,22 @@ class SceneBreakdownTab(QWidget):
         sl_lay.addWidget(self.table_scenes)
 
         tbl_act = QHBoxLayout()
-        for lbl, style in [("⬇ XLSX","background: #171724; color: #A1A1AA; border: 1px solid #252535; border-radius: 4px; padding: 6px 14px; font-weight: bold; font-size: 12px;"),
-                           ("⬇ G-Labs TXT","background: #171724; color: #A1A1AA; border: 1px solid #252535; border-radius: 4px; padding: 6px 14px; font-weight: bold; font-size: 12px;"),
-                           ("⬇ VO Only","background: rgba(90,155,255,0.1); color: #5A9BFF; border: 1px solid rgba(90,155,255,0.2); border-radius: 4px; padding: 6px 14px; font-weight: bold; font-size: 12px;")]:
-            b = QPushButton(lbl); b.setStyleSheet(style)
-            b.setCursor(QCursor(Qt.CursorShape.PointingHandCursor)); tbl_act.addWidget(b)
+        btn_style = "background: #171724; color: #A1A1AA; border: 1px solid #252535; border-radius: 4px; padding: 6px 14px; font-weight: bold; font-size: 12px;"
+        vo_style = "background: rgba(90,155,255,0.1); color: #5A9BFF; border: 1px solid rgba(90,155,255,0.2); border-radius: 4px; padding: 6px 14px; font-weight: bold; font-size: 12px;"
+        self.btn_export_xlsx = QPushButton("⬇ CSV/Excel")
+        self.btn_export_glabs = QPushButton("⬇ G-Labs TXT")
+        self.btn_export_vo = QPushButton("⬇ VO Only")
+        for btn, style in [
+            (self.btn_export_xlsx, btn_style),
+            (self.btn_export_glabs, btn_style),
+            (self.btn_export_vo, vo_style),
+        ]:
+            btn.setStyleSheet(style)
+            btn.setCursor(QCursor(Qt.CursorShape.PointingHandCursor))
+            tbl_act.addWidget(btn)
+        self.btn_export_xlsx.clicked.connect(self._export_scenes_table)
+        self.btn_export_glabs.clicked.connect(self._export_glabs_txt)
+        self.btn_export_vo.clicked.connect(self._export_vo_only)
         self.btn_to_tool3 = QPushButton("→ Assets sang Tool 3")
         self.btn_to_tool3.setStyleSheet("background: rgba(58,214,138,0.1); color: #3AD68A; border: 1px solid rgba(58,214,138,0.2); border-radius: 4px; padding: 6px 16px; font-weight: bold; font-size: 12px;")
         self.btn_to_tool3.setCursor(QCursor(Qt.CursorShape.PointingHandCursor))
@@ -895,6 +908,7 @@ class SceneBreakdownTab(QWidget):
         # ── STATE ────────────────────────────────────────────────────
         self._assigned_data: list[dict] = []   # cache dữ liệu assign mới nhất
         self._prescan_data:  dict       = {}   # cache prescan enriched
+        self._profile_data: dict = {}
         self._pipeline_running = False
         self._char_style = ""
         self._bg_style = ""
@@ -964,6 +978,84 @@ class SceneBreakdownTab(QWidget):
     # ──────────────────────────────────────────────────────────────────
     # LOGIC HANDLERS (giữ nguyên các method cũ + bổ sung _refresh_tabs)
     # ──────────────────────────────────────────────────────────────────
+    def apply_profile(self, profile_data):
+        self._profile_data = profile_data or {}
+        self._load_visual_styles_from_profile(apply_scene_style=True)
+
+    def restore_assigned_scenes(self, assigned_data):
+        if not assigned_data:
+            return
+        self._assigned_data = list(assigned_data)
+        self._populate_table([
+            scene.get("vo_text") or scene.get("action_desc", "")
+            for scene in assigned_data
+        ])
+        for item in assigned_data:
+            row = int(item.get("id", 1)) - 1
+            if not (0 <= row < self.table_scenes.rowCount()):
+                continue
+            for col, key in [(3, "character"), (4, "background"), (5, "camera")]:
+                cell = self.table_scenes.item(row, col)
+                if cell:
+                    cell.setText(str(item.get(key, "")))
+            dur_cell = self.table_scenes.item(row, 6)
+            if dur_cell and item.get("dur"):
+                dur_cell.setText(str(item.get("dur")))
+        self._refresh_generated_tabs(switch_to_glabs=False)
+
+    def _scene_worker_config(self, extra: dict | None = None) -> dict:
+        profile = self._profile_data or load_active_profile() or {}
+        config = {
+            "profile_data": profile,
+            "dna_content": profile.get("dna_content", ""),
+            "style_content": profile.get("style_content", ""),
+        }
+        if extra:
+            config.update(extra)
+        return config
+
+    def _export_scenes_table(self):
+        if self.table_scenes.rowCount() == 0:
+            QMessageBox.warning(self, "Trống", "Chưa có scenes để export.")
+            return
+        path, _ = QFileDialog.getSaveFileName(self, "Export scenes", "scenes_export.csv", "CSV (*.csv)")
+        if not path:
+            return
+        headers = ["STT", "LEVEL", "VO", "CHARACTER", "BACKGROUND", "CAMERA", "DUR"]
+        with open(path, "w", encoding="utf-8-sig", newline="") as handle:
+            writer = csv.writer(handle)
+            writer.writerow(headers)
+            for row in range(self.table_scenes.rowCount()):
+                writer.writerow([
+                    self.table_scenes.item(row, col).text() if self.table_scenes.item(row, col) else ""
+                    for col in range(7)
+                ])
+        QMessageBox.information(self, "Đã xuất", path)
+
+    def _export_glabs_txt(self):
+        prompts = getattr(self.tab_glabs, "_prompts", []) or []
+        if not prompts:
+            QMessageBox.warning(self, "Trống", "Chưa có G-Labs prompts. Chạy Assign Assets trước.")
+            return
+        path, _ = QFileDialog.getSaveFileName(self, "Export G-Labs prompts", "glabs_prompts.txt", "Text (*.txt)")
+        if not path:
+            return
+        with open(path, "w", encoding="utf-8") as handle:
+            handle.write("\n".join(prompts))
+        QMessageBox.information(self, "Đã xuất", path)
+
+    def _export_vo_only(self):
+        lines = self._get_current_scenes_from_table()
+        if not lines:
+            QMessageBox.warning(self, "Trống", "Chưa có VO scenes.")
+            return
+        path, _ = QFileDialog.getSaveFileName(self, "Export VO only", "vo_scenes.txt", "Text (*.txt)")
+        if not path:
+            return
+        with open(path, "w", encoding="utf-8") as handle:
+            handle.write("\n\n".join(lines))
+        QMessageBox.information(self, "Đã xuất", path)
+
     def _update_char_count(self):
         self.lbl_char_count.setText(f"{len(self.txt_script.toPlainText())} ký tự")
 
@@ -1120,7 +1212,7 @@ class SceneBreakdownTab(QWidget):
         scenes = self._get_current_scenes_from_table()
         if not scenes: QMessageBox.warning(self, "Trống", "Split Scenes trước!"); return
         self.btn_scan.setEnabled(False); self.btn_scan.setText("⏳ Đang quét...")
-        self.worker = SceneWorker("prescan", {"scenes": scenes})
+        self.worker = SceneWorker("prescan", self._scene_worker_config({"scenes": scenes}))
         self.worker.result_signal.connect(self._handle_worker_result)
         self.worker.error_signal.connect(lambda e: QMessageBox.critical(self, "Lỗi AI", e))
         self.worker.finished_signal.connect(lambda: [self.btn_scan.setEnabled(True), self.btn_scan.setText("🔍 Pre-scan")])
@@ -1136,7 +1228,7 @@ class SceneBreakdownTab(QWidget):
         self._load_visual_styles_from_profile(apply_scene_style=False)
         scene_style = self._scene_style or DEFAULT_SCENE_STYLE
         self.btn_assign.setEnabled(False); self.btn_assign.setText("⏳ Đang Assign...")
-        self.worker = SceneWorker("assign", {
+        self.worker = SceneWorker("assign", self._scene_worker_config({
             "scenes": scenes,
             "characters": chars,
             "backgrounds": bgs,
@@ -1144,7 +1236,7 @@ class SceneBreakdownTab(QWidget):
             "bg_style": self._bg_style,
             "scene_style": scene_style,
             "prescan_data": self._prescan_data,
-        })
+        }))
         self.worker.result_signal.connect(self._handle_worker_result)
         self.worker.error_signal.connect(lambda e: QMessageBox.critical(self, "Lỗi AI", e))
         self.worker.finished_signal.connect(lambda: [self.btn_assign.setEnabled(True), self.btn_assign.setText("⚡ Assign Assets")])

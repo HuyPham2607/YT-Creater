@@ -6,10 +6,17 @@ from PyQt6.QtWidgets import (QWidget, QVBoxLayout, QHBoxLayout, QLabel,
 from PyQt6.QtCore import Qt, pyqtSignal
 from PyQt6.QtGui import QCursor
 from ui.components import DropZoneWidget
+from core.profile_store import (
+    DB_FILE,
+    ACTIVE_PROFILE_FILE,
+    apply_profile_from_library,
+    load_profiles,
+    normalize_profile,
+    save_profiles,
+)
+from threads.profile_extract_worker import ProfileExtractWorker
 
-# Đường dẫn file lưu trữ database
-DB_FILE = "profiles.json"
-ACTIVE_PROFILE_FILE = "active_profile.json" # File lưu cấu hình khi bấm "Apply to All Tools"
+# Đường dẫn file lưu trữ database (re-exported from core.profile_store)
 
 # =======================================================
 # 1. CỬA SỔ POP-UP: TẠO MỚI & CHỈNH SỬA (Giữ nguyên logic của bạn)
@@ -22,6 +29,7 @@ class ProfileDialog(QDialog):
         self.style_content = ""
         self.dna_content = ""
         self.topic_content = ""
+        self.topics = []
         
         self.setStyleSheet("""
             QDialog { background-color: #0F0F18; border: 1px solid #252535; }
@@ -146,20 +154,61 @@ class ProfileDialog(QDialog):
         main_lay.addLayout(act_lay)
 
     def auto_extract_data(self):
+        if not self.style_content and not self.dna_content:
+            QMessageBox.warning(
+                self,
+                "Thiếu tài liệu",
+                "Upload Style Guide hoặc DNA Kênh trước khi dùng Auto Extract.",
+            )
+            return
+
         self.btn_extract.setText("⏳ Đang trích xuất...")
         self.btn_extract.setEnabled(False)
-        QMessageBox.information(self, "Auto Extract", "Hệ thống đang mô phỏng gọi AI API đọc nội dung...")
-        
-        self.txt_name.setText("Kênh Trinh Thám Lịch Sử")
-        self.txt_niche.setText("Lịch Sử, Bí Ẩn, Án Mạng")
-        self.txt_visual.setText("Dark Academia, Noir")
-        self.txt_lang.setText("English, Tiếng Việt")
-        self.txt_pov.setText("Ngôi 3 (Người kể chuyện)")
-        self.txt_char.setText("Nhân vật mang phong cách thế kỷ 19, áo măng tô...")
-        self.txt_bg.setText("Thành phố sương mù London cổ kính...")
-        self.txt_scene_style.setText("2D cartoon style, bold thick black ink outlines, flat color fills...")
-        self.txt_style_ref.setText("Cinematic lighting, dynamic composition, masterpiece, trending on artstation")
-        
+        self._extract_worker = ProfileExtractWorker({
+            "style_content": self.style_content,
+            "dna_content": self.dna_content,
+            "hint_name": self.txt_name.text().strip(),
+        })
+        self._extract_worker.progress_signal.connect(
+            lambda msg: self.btn_extract.setToolTip(msg)
+        )
+        self._extract_worker.result_signal.connect(self._on_extract_done)
+        self._extract_worker.error_signal.connect(self._on_extract_error)
+        self._extract_worker.finished.connect(self._on_extract_finished)
+        self._extract_worker.start()
+
+    def _on_extract_done(self, data: dict):
+        mapping = {
+            "name": self.txt_name,
+            "niche": self.txt_niche,
+            "visual": self.txt_visual,
+            "lang": self.txt_lang,
+            "pov": self.txt_pov,
+        }
+        for key, widget in mapping.items():
+            value = (data.get(key) or "").strip()
+            if value:
+                widget.setText(value)
+        for key, widget in [
+            ("char_style", self.txt_char),
+            ("bg_style", self.txt_bg),
+            ("scene_style", self.txt_scene_style),
+            ("style_ref", self.txt_style_ref),
+        ]:
+            value = (data.get(key) or "").strip()
+            if value:
+                widget.setPlainText(value)
+        QMessageBox.information(
+            self,
+            "Auto Extract xong",
+            f"Đã trích xuất profile bằng {data.get('model_used', 'AI')}.\n"
+            "Kiểm tra và chỉnh sửa trước khi Lưu.",
+        )
+
+    def _on_extract_error(self, message: str):
+        QMessageBox.critical(self, "Auto Extract lỗi", message)
+
+    def _on_extract_finished(self):
         self.btn_extract.setText("⚡ Auto Extract")
         self.btn_extract.setEnabled(True)
 
@@ -183,7 +232,8 @@ class ProfileDialog(QDialog):
             "style_ref": self.txt_style_ref.toPlainText().strip(),
             "style_content": self.style_content,
             "dna_content": self.dna_content,
-            "topic_content": self.topic_content
+            "topic_content": self.topic_content,
+            "topics": list(self.topics or []),
         }
 
     def load_data(self, data):
@@ -202,6 +252,7 @@ class ProfileDialog(QDialog):
         self.style_content = data.get("style_content", "")
         self.dna_content = data.get("dna_content", "")
         self.topic_content = data.get("topic_content", "")
+        self.topics = data.get("topics", []) or []
         
         if self.style_content:
             self.dz_style.lbl_desc.setText("Đã lưu (có sẵn)")
@@ -423,13 +474,8 @@ class ProfileManagerTab(QWidget):
         return lbl
 
     def load_database(self):
-        if os.path.exists(DB_FILE):
-            try:
-                with open(DB_FILE, "r", encoding="utf-8") as f:
-                    self.profiles = json.load(f)
-            except Exception:
-                self.profiles = []
-        
+        self.profiles = load_profiles()
+
         # Chọn mặc định cái đầu tiên nếu có
         if self.profiles:
             self.selected_index = 0
@@ -439,8 +485,7 @@ class ProfileManagerTab(QWidget):
         self.render_list()
 
     def save_database(self):
-        with open(DB_FILE, "w", encoding="utf-8") as f:
-            json.dump(self.profiles, f, ensure_ascii=False, indent=4)
+        save_profiles(self.profiles)
 
     def render_list(self):
         # Xóa list cũ
@@ -488,10 +533,9 @@ class ProfileManagerTab(QWidget):
     def apply_to_all_tools(self):
         """Lưu profile đang chọn thành Active Profile để các Tool khác dùng"""
         if self.selected_index >= 0:
-            active_data = self.profiles[self.selected_index]
+            active_data = normalize_profile(self.profiles[self.selected_index])
             try:
-                with open(ACTIVE_PROFILE_FILE, "w", encoding="utf-8") as f:
-                    json.dump(active_data, f, ensure_ascii=False, indent=4)
+                apply_profile_from_library(active_data)
                 QMessageBox.information(self, "Thành công", f"Đã áp dụng cấu hình của kênh '{active_data['name']}' cho toàn bộ Tools!")
                 self.profile_applied.emit(active_data)
             except Exception as e:
@@ -512,7 +556,9 @@ class ProfileManagerTab(QWidget):
             dialog.load_data(self.profiles[self.selected_index])
             if dialog.exec():
                 updated_data = dialog.get_profile_data()
-                self.profiles[self.selected_index] = updated_data
+                existing = normalize_profile(self.profiles[self.selected_index])
+                updated_data["topics"] = existing.get("topics", [])
+                self.profiles[self.selected_index] = normalize_profile(updated_data)
                 self.save_database()
                 self.render_list()
 

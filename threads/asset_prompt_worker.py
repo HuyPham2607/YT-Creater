@@ -21,17 +21,16 @@ except ImportError:
     types = None
 from dotenv import load_dotenv
 from threads.gemini_retry import generate_content_with_retries
+from core.profile_context import (
+    build_worker_focus_block,
+    channel_context_user_note,
+    get_or_create_shared_cache,
+)
 
 load_dotenv()
 
 MODEL = "gemini-3.5-flash"
 
-
-def _clip_context(text, limit=10000):
-    text = (text or "").strip()
-    if len(text) <= limit:
-        return text
-    return text[:limit] + "\n...[TRUNCATED]..."
 
 # ──────────────────────────────────────────────
 # SYSTEM PROMPTS
@@ -56,7 +55,7 @@ RULES:
 8. End EXACTLY with:
    "Professional white background, TOP ROW 4 full-body views front 45-degree side back,
    BOTTOM ROW 6 expression close-ups, clean sheet layout, no color palette strip, no swatches, no labels, no text."
-9. Output ONLY the prompt string. No JSON, no explanation, no markdown."""
+9. Output ONLY the prompt string in English. No JSON, no explanation, no markdown, no Vietnamese."""
 
 BG_SYSTEM = """You are an expert AI image prompt engineer.
 Generate a single background variation sheet prompt.
@@ -79,30 +78,50 @@ RULES:
    - Keep all four options empty and reusable as backgrounds, with no people and no character silhouettes.
 8. End EXACTLY with:
    "2x2 contact sheet, four separate 16:9 background options for the same location, thin white gutters between panels, NO characters NO people NO readable text NO words NO logos."
-9. Output ONLY the prompt string. No JSON, no explanation, no markdown."""
+9. Output ONLY the prompt string in English. No JSON, no explanation, no markdown, no Vietnamese."""
 
 
 # ──────────────────────────────────────────────
 # USER MESSAGE BUILDERS
 # ──────────────────────────────────────────────
 
-def build_channel_context(channel_desc="", topic="", channel_dna="", style_guide=""):
-    return f"""=== CHANNEL / VIDEO CONTEXT ===
-Channel description:
-{channel_desc or "No channel description provided."}
+def build_channel_context(
+    channel_desc="",
+    topic="",
+    channel_dna="",
+    style_guide="",
+    *,
+    include_dna_focus=True,
+):
+    lines = [
+        "=== CHANNEL / VIDEO CONTEXT ===",
+        f"Channel description:\n{channel_desc or 'No channel description provided.'}",
+        f"Video topic:\n{topic or 'No video topic provided.'}",
+    ]
+    if include_dna_focus:
+        profile = {
+            "dna_content": channel_dna or "",
+            "style_content": style_guide or "",
+        }
+        focus = build_worker_focus_block("asset", profile)
+        lines.append(f"VISUAL IDENTITY FOCUS:\n{focus or 'No visual identity focus available.'}")
+    else:
+        lines.append("Channel DNA/Style: attached via cached context — follow visual identity from cache.")
+    return "\n\n".join(lines)
 
-Video topic:
-{topic or "No video topic provided."}
 
-CHANNEL DNA - use only visual/brand-identity rules relevant to image prompts:
-{_clip_context(channel_dna)}
-
-STYLE GUIDE - use only visual rules relevant to image prompts:
-{_clip_context(style_guide)}
-"""
-
-
-def build_char_user_message(asset_name, asset_info, char_style, scene_style, channel_desc="", topic="", channel_dna="", style_guide=""):
+def build_char_user_message(
+    asset_name,
+    asset_info,
+    char_style,
+    scene_style,
+    channel_desc="",
+    topic="",
+    channel_dna="",
+    style_guide="",
+    *,
+    include_dna_focus=True,
+):
     samples = "\n".join(f"- {s}" for s in asset_info.get("sample_scenes", []))
     return f"""=== SCENE STYLE (paste verbatim at start) ===
 {scene_style}
@@ -110,7 +129,7 @@ def build_char_user_message(asset_name, asset_info, char_style, scene_style, cha
 === CHARACTER STYLE (aesthetic base) ===
 {char_style}
 
-{build_channel_context(channel_desc, topic, channel_dna, style_guide)}
+{build_channel_context(channel_desc, topic, channel_dna, style_guide, include_dna_focus=include_dna_focus)}
 
 === CHARACTER TO GENERATE ===
 Name: {asset_name}
@@ -131,7 +150,18 @@ Sample scenes this character appears in:
 Generate the character reference sheet prompt now."""
 
 
-def build_bg_user_message(asset_name, asset_info, bg_style, scene_style, channel_desc="", topic="", channel_dna="", style_guide=""):
+def build_bg_user_message(
+    asset_name,
+    asset_info,
+    bg_style,
+    scene_style,
+    channel_desc="",
+    topic="",
+    channel_dna="",
+    style_guide="",
+    *,
+    include_dna_focus=True,
+):
     samples = "\n".join(f"- {s}" for s in asset_info.get("sample_scenes", []))
     return f"""=== SCENE STYLE (paste verbatim at start) ===
 {scene_style}
@@ -139,7 +169,7 @@ def build_bg_user_message(asset_name, asset_info, bg_style, scene_style, channel
 === BACKGROUND STYLE (aesthetic base) ===
 {bg_style}
 
-{build_channel_context(channel_desc, topic, channel_dna, style_guide)}
+{build_channel_context(channel_desc, topic, channel_dna, style_guide, include_dna_focus=include_dna_focus)}
 
 === BACKGROUND TO GENERATE ===
 Name: {asset_name}
@@ -164,26 +194,54 @@ Generate the background reference sheet prompt now."""
 # API CALL
 # ──────────────────────────────────────────────
 
-def call_api(system_prompt, user_message, progress_callback=None, log_prefix="ASSET_PROMPT"):
+def call_api(
+    system_prompt,
+    user_message_builder,
+    profile=None,
+    progress_callback=None,
+    log_prefix="ASSET_PROMPT",
+):
     if genai is None:
         raise ImportError("Thư viện 'google-genai' chưa được cài đặt.")
-        
+
     api_key = os.getenv("GEMINI_API_KEY")
     if not api_key:
         raise ValueError("Không tìm thấy GEMINI_API_KEY trong file .env!")
-        
+
     client = genai.Client(api_key=api_key)
-    gen_config = types.GenerateContentConfig(
-        system_instruction=system_prompt,
-        temperature=0.7
-    )
-    
+    profile = profile or {}
+
+    def build_request(model_name):
+        cached_name = None
+        try:
+            cached_name = get_or_create_shared_cache(
+                client,
+                model_name,
+                profile,
+                log_prefix=log_prefix,
+            )
+        except Exception as cache_error:
+            print(f"⚠️ [{log_prefix}] Shared cache unavailable: {cache_error}")
+
+        include_dna_focus = not bool(cached_name)
+        contents = user_message_builder(include_dna_focus=include_dna_focus)
+        if cached_name:
+            contents += channel_context_user_note()
+
+        gen_kwargs = {
+            "system_instruction": system_prompt,
+            "temperature": 0.7,
+        }
+        if cached_name:
+            gen_kwargs["cachedContent"] = cached_name
+        return {
+            "contents": contents,
+            "config": types.GenerateContentConfig(**gen_kwargs),
+        }
+
     response, _ = generate_content_with_retries(
         client=client,
-        build_request=lambda model_name: {
-            "contents": user_message,
-            "config": gen_config,
-        },
+        build_request=build_request,
         progress_callback=progress_callback,
         log_prefix=log_prefix,
     )
@@ -240,31 +298,53 @@ def generate_all_prompts(
         result = {"characters": {}, "backgrounds": {}}
         total = len(characters) + len(backgrounds)
         done = 0
+        profile = {
+            "dna_content": channel_dna or "",
+            "style_content": style_guide or "",
+        }
 
         for name, info in characters.items():
             if on_progress:
                 on_progress(f"[{done+1}/{total}] Character: {name}...")
-            msg = build_char_user_message(
-                name, info, char_style, scene_style,
-                channel_desc=channel_desc,
-                topic=topic,
-                channel_dna=channel_dna,
-                style_guide=style_guide,
+            result["characters"][name] = call_api(
+                CHAR_SYSTEM,
+                lambda include_dna_focus=True, asset_name=name, asset_info=info: build_char_user_message(
+                    asset_name,
+                    asset_info,
+                    char_style,
+                    scene_style,
+                    channel_desc=channel_desc,
+                    topic=topic,
+                    channel_dna=channel_dna,
+                    style_guide=style_guide,
+                    include_dna_focus=include_dna_focus,
+                ),
+                profile=profile,
+                progress_callback=on_progress,
+                log_prefix="ASSET_CHAR",
             )
-            result["characters"][name] = call_api(CHAR_SYSTEM, msg, on_progress, "ASSET_CHAR")
             done += 1
 
         for name, info in backgrounds.items():
             if on_progress:
                 on_progress(f"[{done+1}/{total}] Background: {name}...")
-            msg = build_bg_user_message(
-                name, info, bg_style, scene_style,
-                channel_desc=channel_desc,
-                topic=topic,
-                channel_dna=channel_dna,
-                style_guide=style_guide,
+            result["backgrounds"][name] = call_api(
+                BG_SYSTEM,
+                lambda include_dna_focus=True, asset_name=name, asset_info=info: build_bg_user_message(
+                    asset_name,
+                    asset_info,
+                    bg_style,
+                    scene_style,
+                    channel_desc=channel_desc,
+                    topic=topic,
+                    channel_dna=channel_dna,
+                    style_guide=style_guide,
+                    include_dna_focus=include_dna_focus,
+                ),
+                profile=profile,
+                progress_callback=on_progress,
+                log_prefix="ASSET_BG",
             )
-            result["backgrounds"][name] = call_api(BG_SYSTEM, msg, on_progress, "ASSET_BG")
             done += 1
 
         if on_success:

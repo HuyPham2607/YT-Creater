@@ -19,12 +19,14 @@ from PyQt6.QtWidgets import (
     QWidget,
 )
 from PyQt6.QtCore import Qt, pyqtSignal
+from core.srt_chapters import srt_to_chapter_lines
 
 from threads.metadata_worker import MetadataWorker
 
 
 class VideoMetadataTab(QWidget):
     request_load_script = pyqtSignal()
+    request_load_chapters_from_voice = pyqtSignal()
 
     def __init__(self):
         super().__init__()
@@ -98,7 +100,11 @@ class VideoMetadataTab(QWidget):
         self.btn_load_script = QPushButton("Load Script from Tool 1")
         self.btn_load_script.setObjectName("btn_sec")
         self.btn_load_script.clicked.connect(lambda: self.request_load_script.emit())
+        self.btn_load_chapters = QPushButton("Chapters từ Voice SRT")
+        self.btn_load_chapters.setObjectName("btn_sec")
+        self.btn_load_chapters.clicked.connect(lambda: self.request_load_chapters_from_voice.emit())
         script_bar.addWidget(self.btn_load_script)
+        script_bar.addWidget(self.btn_load_chapters)
         top_lay.addLayout(script_bar)
 
         self.txt_script = QTextEdit()
@@ -177,6 +183,18 @@ class VideoMetadataTab(QWidget):
 
     def apply_profile(self, profile_data):
         self.profile_data = profile_data or {}
+
+    def load_chapters_from_srt(self, srt_path: str):
+        try:
+            chapters = srt_to_chapter_lines(srt_path)
+            if not chapters:
+                QMessageBox.warning(self, "Trống", "Không đọc được chapter từ file SRT.")
+                return
+            self.txt_chapters.setPlainText(chapters)
+            self.tabs.setCurrentIndex(4)
+            QMessageBox.information(self, "Đã nạp", f"Đã tạo {len(chapters.splitlines())} chapter từ SRT.")
+        except Exception as exc:
+            QMessageBox.warning(self, "Lỗi SRT", str(exc))
 
     def load_script_data(self, title="", script="", topic=""):
         if title:

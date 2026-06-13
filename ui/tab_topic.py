@@ -1,11 +1,17 @@
 import json
 import os
-from PyQt6.QtWidgets import (QWidget, QVBoxLayout, QHBoxLayout, QLabel, 
-                             QLineEdit, QPushButton, QTextEdit, QGridLayout, 
-                             QComboBox, QScrollArea, QApplication, QFileDialog, QFrame, QSizePolicy, QMessageBox)
-from PyQt6.QtCore import Qt, QTimer
+from PyQt6.QtWidgets import (QWidget, QVBoxLayout, QHBoxLayout, QLabel,
+                             QLineEdit, QPushButton, QTextEdit, QGridLayout,
+                             QComboBox, QScrollArea, QApplication, QFileDialog, QFrame,
+                             QSizePolicy, QMessageBox, QDialog, QListWidget, QDialogButtonBox)
+from PyQt6.QtCore import Qt, QTimer, pyqtSignal
 from ui.components import DropZoneWidget
 from threads.topic_worker import TopicWorker
+from core.profile_store import (
+    build_done_content,
+    load_active_profile,
+    save_topic_to_active_profile,
+)
 
 # =======================================================
 # COMPONENT: KHUNG TITLE CLICK ĐƯỢC
@@ -170,7 +176,10 @@ class TopicCard(QFrame):
         f_lay.addStretch()
         
         btn_s = QPushButton("★ Save", objectName="save_btn"); btn_s.setCursor(Qt.CursorShape.PointingHandCursor)
-        self.btn_save = btn_s # Expose the button
+        self.btn_save = btn_s
+        self.btn_tool1 = btn_t
+        self.btn_copy = btn_c
+        self._details = details or {}
         f_lay.addWidget(self.btn_save)
         main_lay.addWidget(foot_frm)
 
@@ -179,6 +188,8 @@ class TopicCard(QFrame):
 # TAB CHÍNH
 # =======================================================
 class TopicIdeatorTab(QWidget):
+    send_to_script = pyqtSignal(dict)
+
     def __init__(self):
         super().__init__()
         main_lay = QVBoxLayout(self)
@@ -239,6 +250,27 @@ class TopicIdeatorTab(QWidget):
 
         ctx_lay.addWidget(self.dz_style); ctx_lay.addWidget(self.dz_dna); ctx_lay.addWidget(self.dz_done)
         lay.addLayout(ctx_lay)
+
+        # --- 1b. TOPICS ĐÃ LƯU TRONG PROFILE ---
+        lay.addWidget(QLabel("TOPICS ĐÃ LƯU TRONG PROFILE", objectName="section_label"))
+        saved_row = QHBoxLayout()
+        self.lbl_saved_topics = QLabel("0 topic trong Profile")
+        self.lbl_saved_topics.setObjectName("muted")
+        self.btn_view_saved_topics = QPushButton("📋 Xem danh sách đã lưu", objectName="btn_sec")
+        self.btn_view_saved_topics.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.btn_view_saved_topics.clicked.connect(self._view_saved_topics_from_profile)
+        saved_row.addWidget(self.lbl_saved_topics)
+        saved_row.addStretch()
+        saved_row.addWidget(self.btn_view_saved_topics)
+        lay.addLayout(saved_row)
+
+        saved_hint = QLabel(
+            "Sau khi Generate: bấm «→ Tool 1» trên card để chọn title phụ và chuyển sang viết kịch bản "
+            "(tự lưu vào Profile). Hoặc bấm ★ Save rồi dùng «Chọn từ Profile» ở Tool 1."
+        )
+        saved_hint.setWordWrap(True)
+        saved_hint.setStyleSheet("color: #606075; font-size: 11px; margin-bottom: 4px;")
+        lay.addWidget(saved_hint)
 
         # --- 2. NGÁCH KÊNH ---
         lay.addWidget(QLabel("NGÁCH KÊNH", objectName="section_label"))
@@ -332,7 +364,9 @@ class TopicIdeatorTab(QWidget):
     def apply_profile(self, profile_data):
         self.style_content = profile_data.get("style_content", "")
         self.dna_content = profile_data.get("dna_content", "")
-        self.done_content = profile_data.get("done_content") or profile_data.get("topic_content", "")
+        self.done_content = build_done_content(profile_data)
+        self._profile_data = profile_data
+        self._update_saved_topics_label(profile_data)
         
         if self.style_content:
             self.dz_style.lbl_desc.setText("Đã nạp từ Profile")
@@ -367,6 +401,258 @@ class TopicIdeatorTab(QWidget):
     # =======================================================
     # LOGIC: KẾT NỐI AI WORKER VÀ RENDER KẾT QUẢ
     # =======================================================
+    def _update_saved_topics_label(self, profile_data=None):
+        profile_data = profile_data or getattr(self, "_profile_data", {}) or {}
+        topics = profile_data.get("topics") or []
+        with_script = sum(
+            1 for topic in topics
+            if isinstance(topic.get("script"), dict) and (topic.get("script") or {}).get("content")
+        )
+        self.lbl_saved_topics.setText(f"{len(topics)} topic đã lưu · {with_script} có kịch bản")
+
+    def _normalize_topic_data(self, topic):
+        data = dict(topic or {})
+        if not data.get("topic_name") and data.get("title"):
+            data["topic_name"] = data["title"]
+        return data
+
+    def _build_topic_card(self, index, topic_data, *, saved=False):
+        topic = self._normalize_topic_data(topic_data)
+        titles = [
+            (
+                item.get("text", ""),
+                "{} | score {}".format(item.get("formula", ""), item.get("score", "-")),
+            )
+            for item in topic.get("titles", [])
+            if isinstance(item, dict)
+        ]
+        card = TopicCard(
+            index,
+            topic.get("topic_name", "Unknown Topic"),
+            titles,
+            topic.get("unique_angle", ""),
+            topic.get("hook_sentence", ""),
+            topic.get("tags", []),
+            str(topic.get("ctr_level", "HIGH")),
+            str(topic.get("difficulty_level", "MEDIUM")),
+            details=topic,
+        )
+        if saved:
+            card.btn_save.setText("✓ Đã lưu")
+            card.btn_save.setEnabled(False)
+            card.btn_save.setStyleSheet(
+                "background: #282840; color: #8A8AA0; border: none; border-radius: 6px; "
+                "padding: 6px 16px; font-weight: bold; font-size: 12px;"
+            )
+        self._wire_card_actions(card, topic)
+        return card
+
+    def _wire_card_actions(self, card, topic_data):
+        card.btn_tool1.clicked.connect(
+            lambda checked=False, topic=topic_data, card_widget=card: self._on_send_to_tool1(topic, card_widget)
+        )
+        card.btn_copy.clicked.connect(
+            lambda checked=False, topic=topic_data: self._copy_topic_json(topic)
+        )
+
+    def _copy_topic_json(self, topic_data):
+        topic = self._normalize_topic_data(topic_data)
+        QApplication.clipboard().setText(json.dumps(topic, ensure_ascii=False, indent=2))
+        QMessageBox.information(self, "Đã copy", "Đã copy toàn bộ JSON topic vào clipboard.")
+
+    def _pick_subtitle_dialog(self, topic_data, parent=None):
+        topic = self._normalize_topic_data(topic_data)
+        topic_name = topic.get("topic_name", "Không tên")
+        subtitles = [
+            item for item in topic.get("titles", [])
+            if isinstance(item, dict) and (item.get("text") or "").strip()
+        ]
+        if not subtitles:
+            QMessageBox.warning(parent or self, "Thiếu title", "Topic này không có title phụ để chọn.")
+            return None
+
+        if len(subtitles) == 1:
+            return subtitles[0].get("text", "").strip()
+
+        dialog = QDialog(parent or self)
+        dialog.setWindowTitle("Chọn title phụ → Tool 1")
+        dialog.resize(640, 420)
+        dialog.setStyleSheet("""
+            QDialog { background-color: #0F0F18; border: 1px solid #252535; }
+            QLabel { color: #E8E8F0; font-size: 13px; }
+            QListWidget { background-color: #18182B; border: 1px solid #282840; border-radius: 8px; color: #E8E8F0; }
+            QListWidget::item { padding: 12px; border-bottom: 1px solid #252535; }
+            QListWidget::item:selected { background-color: rgba(232,116,42,0.2); border: 1px solid #E8742A; }
+        """)
+        layout = QVBoxLayout(dialog)
+        layout.addWidget(QLabel(f"Topic: <b>{topic_name}</b><br>Chọn 1 title phụ để viết kịch bản:"))
+
+        list_widget = QListWidget()
+        list_widget.setWordWrap(True)
+        for item in subtitles:
+            formula = item.get("formula", "")
+            score = item.get("score", "-")
+            list_widget.addItem(f"{item.get('text', '')}\n   {formula} | score {score}")
+        list_widget.setCurrentRow(0)
+        layout.addWidget(list_widget)
+
+        btn_box = QDialogButtonBox(QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel)
+        btn_ok = btn_box.button(QDialogButtonBox.StandardButton.Ok)
+        btn_ok.setText("→ Tool 1")
+        btn_box.button(QDialogButtonBox.StandardButton.Cancel).setText("Hủy")
+        btn_box.accepted.connect(dialog.accept)
+        btn_box.rejected.connect(dialog.reject)
+        layout.addWidget(btn_box)
+
+        if dialog.exec() != QDialog.DialogCode.Accepted:
+            return None
+        row = list_widget.currentRow()
+        if row < 0 or row >= len(subtitles):
+            return None
+        return subtitles[row].get("text", "").strip()
+
+    def _mark_card_saved(self, card_widget):
+        if not card_widget:
+            return
+        card_widget.btn_save.setText("✓ Đã lưu")
+        card_widget.btn_save.setEnabled(False)
+        card_widget.btn_save.setStyleSheet(
+            "background: #282840; color: #8A8AA0; border: none; border-radius: 6px; "
+            "padding: 6px 16px; font-weight: bold; font-size: 12px;"
+        )
+
+    def _on_send_to_tool1(self, topic_data, card_widget=None):
+        if not load_active_profile():
+            QMessageBox.warning(
+                self,
+                "Chưa có Profile",
+                "Vui lòng chọn và áp dụng một Profile đang hoạt động trước.",
+            )
+            return
+
+        selected_subtitle = self._pick_subtitle_dialog(topic_data)
+        if not selected_subtitle:
+            return
+
+        if not self._save_topic_to_profile(topic_data, card_widget, silent=True):
+            return
+
+        topic = self._normalize_topic_data(topic_data)
+        topic_name = topic.get("topic_name", "")
+        selected_item = None
+        for item in topic.get("titles", []):
+            if isinstance(item, dict) and (item.get("text") or "").strip() == selected_subtitle:
+                selected_item = item
+                break
+
+        topic_strategy = dict(topic)
+        if selected_item:
+            topic_strategy["selected_title"] = selected_item
+        topic_strategy["selected_title_text"] = selected_subtitle
+
+        self.send_to_script.emit({
+            "topic_title": topic_name,
+            "selected_subtitle": selected_subtitle,
+            "topic_strategy": topic_strategy,
+        })
+
+    def _append_script_status_block(self, parent_layout, topic_data):
+        script = topic_data.get("script") if isinstance(topic_data.get("script"), dict) else None
+        if not script:
+            return
+
+        box = QFrame()
+        box.setStyleSheet(
+            "QFrame { background: rgba(58,214,138,0.06); border: 1px solid rgba(58,214,138,0.2); "
+            "border-radius: 8px; margin: 0 0 12px 0; }"
+        )
+        lay = QVBoxLayout(box)
+        lay.setContentsMargins(14, 10, 14, 10)
+        lay.addWidget(QLabel(
+            "<b>TRẠNG THÁI KỊCH BẢN</b>",
+            styleSheet="color: #3AD68A; font-size: 10px; font-weight: bold; border: none; background: transparent;",
+        ))
+        script_title = (script.get("title") or "").strip()
+        if script_title:
+            lay.addWidget(QLabel(
+                f"Title đã chọn: {script_title}",
+                styleSheet="color: #E8E8F0; font-size: 12px; border: none; background: transparent;",
+            ))
+        content = (script.get("content") or "").strip()
+        if content:
+            preview = content if len(content) <= 500 else content[:500] + "..."
+            preview_lbl = QLabel(preview)
+            preview_lbl.setWordWrap(True)
+            preview_lbl.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
+            preview_lbl.setStyleSheet(
+                "color: #C4C4DC; font-size: 12px; border: none; background: transparent; line-height: 1.4;"
+            )
+            lay.addWidget(preview_lbl)
+        research = (script.get("research") or "").strip()
+        if research:
+            research_preview = research if len(research) <= 300 else research[:300] + "..."
+            lay.addWidget(QLabel(
+                f"<b>Research:</b> {research_preview}",
+                styleSheet="color: #8A8AA0; font-size: 11px; border: none; background: transparent;",
+            ))
+        parent_layout.addWidget(box)
+
+    def _view_saved_topics_from_profile(self):
+        profile_data = load_active_profile() or getattr(self, "_profile_data", {}) or {}
+        topics = profile_data.get("topics") or []
+        if not topics:
+            QMessageBox.information(
+                self,
+                "Chưa có topic",
+                "Profile chưa có topic nào được lưu.\n\n"
+                "Cách dùng:\n"
+                "1. Bấm Generate Topics\n"
+                "2. Bấm lưu trên card topic bạn chọn\n"
+                "3. Mở Tool 1 → «Chọn từ Profile» để viết kịch bản",
+            )
+            return
+
+        dialog = QDialog(self)
+        dialog.setWindowTitle("Topics đã lưu trong Profile")
+        dialog.resize(min(1200, self.window().width() if self.window() else 1200), 820)
+        dialog.setStyleSheet("""
+            QDialog { background-color: #08080D; }
+            QLabel { color: #E8E8F0; }
+            QScrollArea { border: none; background: transparent; }
+        """)
+        layout = QVBoxLayout(dialog)
+        layout.setContentsMargins(16, 16, 16, 12)
+
+        header = QLabel(
+            f"<b>Profile: {profile_data.get('name', 'Active')}</b> — "
+            f"{len(topics)} topic đã lưu · cuộn để xem chi tiết đầy đủ như khi Generate"
+        )
+        header.setWordWrap(True)
+        layout.addWidget(header)
+
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+        scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+
+        container = QWidget()
+        cards_lay = QVBoxLayout(container)
+        cards_lay.setContentsMargins(0, 0, 8, 0)
+        cards_lay.setSpacing(16)
+
+        for index, topic in enumerate(topics, 1):
+            cards_lay.addWidget(self._build_topic_card(index, topic, saved=True))
+            self._append_script_status_block(cards_lay, topic)
+
+        cards_lay.addStretch()
+        scroll.setWidget(container)
+        layout.addWidget(scroll)
+
+        btn_box = QDialogButtonBox(QDialogButtonBox.StandardButton.Close)
+        btn_box.rejected.connect(dialog.reject)
+        btn_box.button(QDialogButtonBox.StandardButton.Close).setText("Đóng")
+        layout.addWidget(btn_box)
+        dialog.exec()
+
     def _generate_topics(self):
         self.btn_gen.setEnabled(False)
         self.btn_gen.setText("⏳ Đang xử lý AI...")
@@ -397,7 +683,8 @@ class TopicIdeatorTab(QWidget):
             "extra": self.txt_extra_request.toPlainText().strip(),
             "style_content": getattr(self, 'style_content', ""),
             "dna_content": getattr(self, 'dna_content', ""),
-            "done_content": getattr(self, 'done_content', "")
+            "done_content": getattr(self, 'done_content', ""),
+            "profile_data": getattr(self, '_profile_data', {}),
         }
 
         self.worker = TopicWorker(config)
@@ -439,21 +726,7 @@ class TopicIdeatorTab(QWidget):
         self.output_header.show()
 
         for i, t in enumerate(topics, 1):
-            t_name = t.get("topic_name", "Unknown Topic")
-            t_titles = [
-                (
-                    item.get("text", ""),
-                    "{} | score {}".format(item.get("formula", ""), item.get("score", "-"))
-                )
-                for item in t.get("titles", [])
-            ]
-            t_angle = t.get("unique_angle", "")
-            t_hook = t.get("hook_sentence", "")
-            t_tags = t.get("tags", [])
-            t_ctr = str(t.get("ctr_level", "HIGH"))
-            t_diff = str(t.get("difficulty_level", "MEDIUM"))
-
-            card = TopicCard(i, t_name, t_titles, t_angle, t_hook, t_tags, t_ctr, t_diff, details=t)
+            card = self._build_topic_card(i, t, saved=False)
             card.btn_save.clicked.connect(
                 lambda checked=False, topic_data=t, card_widget=card: self._save_topic_to_profile(topic_data, card_widget)
             )
@@ -479,51 +752,42 @@ class TopicIdeatorTab(QWidget):
             lbl_err.setStyleSheet("color: #E84040; font-size: 14px;")
             self.results_layout.addWidget(lbl_err)
 
-    def _save_topic_to_profile(self, topic_data, card_widget):
-        ACTIVE_PROFILE_FILE = "active_profile.json"
-        if not os.path.exists(ACTIVE_PROFILE_FILE):
-            QMessageBox.warning(self, "Chưa có Profile", "Vui lòng chọn và áp dụng một Profile đang hoạt động trước khi lưu.")
-            return
+    def _save_topic_to_profile(self, topic_data, card_widget=None, *, silent=False):
+        if not load_active_profile():
+            if not silent:
+                QMessageBox.warning(self, "Chưa có Profile", "Vui lòng chọn và áp dụng một Profile đang hoạt động trước khi lưu.")
+            return False
 
-        try:
-            with open(ACTIVE_PROFILE_FILE, 'r', encoding='utf-8') as f:
-                profile_data = json.load(f)
-        except (json.JSONDecodeError, FileNotFoundError):
-            QMessageBox.critical(self, "Lỗi Profile", f"Không thể đọc hoặc file '{ACTIVE_PROFILE_FILE}' bị lỗi.")
-            return
-
-        # Chuẩn bị dữ liệu topic để lưu, đổi 'topic_name' thành 'title' để khớp với Tool 2
         topic_to_save = topic_data.copy()
-        if 'topic_name' in topic_to_save:
-            topic_to_save['title'] = topic_to_save.pop('topic_name')
-        
-        # Thêm trường script rỗng để Tool 1 có thể điền vào sau
-        topic_to_save['script'] = None 
-
-        if "topics" not in profile_data or not isinstance(profile_data.get("topics"), list):
-            profile_data["topics"] = []
-
-        # Kiểm tra trùng lặp dựa trên title
-        existing_titles = [t.get("title") for t in profile_data["topics"] if t.get("title")]
-        if topic_to_save.get("title") in existing_titles:
-            QMessageBox.information(self, "Đã tồn tại", f"Topic '{topic_to_save.get('title')}' đã được lưu vào profile rồi.")
-            card_widget.btn_save.setText("✓ Đã lưu")
-            card_widget.btn_save.setEnabled(False)
-            card_widget.btn_save.setStyleSheet("background: #282840; color: #8A8AA0; border: none; border-radius: 6px; padding: 6px 16px; font-weight: bold; font-size: 12px;")
-            return
-
-        profile_data["topics"].append(topic_to_save)
+        if "topic_name" in topic_to_save:
+            topic_to_save["title"] = topic_to_save.pop("topic_name")
+        topic_to_save.setdefault("script", None)
 
         try:
-            with open(ACTIVE_PROFILE_FILE, 'w', encoding='utf-8') as f:
-                json.dump(profile_data, f, ensure_ascii=False, indent=4)
-            
-            card_widget.btn_save.setText("✓ Đã lưu")
-            card_widget.btn_save.setEnabled(False)
-            card_widget.btn_save.setStyleSheet("background: #282840; color: #8A8AA0; border: none; border-radius: 6px; padding: 6px 16px; font-weight: bold; font-size: 12px;")
-            QMessageBox.information(self, "Thành công", f"Đã lưu topic '{topic_to_save.get('title')}' vào Profile đang hoạt động.")
+            profile_data, created = save_topic_to_active_profile(topic_to_save)
+            self._profile_data = profile_data
+            self.done_content = build_done_content(profile_data)
+            self._update_saved_topics_label(profile_data)
+            self._mark_card_saved(card_widget)
+
+            if not silent:
+                if created:
+                    QMessageBox.information(
+                        self,
+                        "Thành công",
+                        f"Đã lưu topic '{topic_to_save.get('title')}' vào Profile (active + thư viện).",
+                    )
+                else:
+                    QMessageBox.information(
+                        self,
+                        "Đã cập nhật",
+                        f"Topic '{topic_to_save.get('title')}' đã tồn tại — đã cập nhật dữ liệu.",
+                    )
+            return True
         except Exception as e:
-            QMessageBox.critical(self, "Lỗi Lưu File", f"Không thể ghi vào file '{ACTIVE_PROFILE_FILE}':\n{e}")
+            if not silent:
+                QMessageBox.critical(self, "Lỗi Lưu File", f"Không thể lưu topic vào Profile:\n{e}")
+            return False
 
     def _on_worker_finished(self):
         self.btn_gen.setEnabled(True)

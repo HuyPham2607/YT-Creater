@@ -2,8 +2,6 @@ import os
 import time
 import json
 import re
-import hashlib
-from datetime import datetime, timezone
 from pathlib import Path
 try:
     from google import genai
@@ -14,126 +12,38 @@ except ImportError:
 from dotenv import load_dotenv
 from PyQt6.QtCore import QThread, pyqtSignal
 from threads.gemini_retry import get_gemini_model_chain, is_auth_error, is_retryable_error, should_try_next_model
+from core.profile_context import (
+    build_worker_focus_block,
+    channel_context_user_note,
+    get_or_create_shared_cache,
+)
 
 env_path = Path(__file__).parent.parent / '.env'
-PROJECT_ROOT = Path(__file__).parent.parent
-CACHE_INDEX_PATH = PROJECT_ROOT / 'data' / 'gemini_cache_index.json'
 load_dotenv(dotenv_path=env_path)
-GEMINI_CACHE_TTL_SECONDS = int(os.getenv('GEMINI_CACHE_TTL_SECONDS', '3600'))
 
 
-def _clip_context(value, max_chars):
-    value = (value or "").strip()
-    if len(value) <= max_chars:
-        return value
-    return value[:max_chars] + "\n...[TRUNCATED]"
+def _profile_from_config(config):
+    profile = dict(config.get("profile_data") or {})
+    for key in ("dna_content", "style_content", "topic_content", "name", "niche", "topics"):
+        if config.get(key) is not None and config.get(key) != "":
+            profile[key] = config.get(key)
+    return profile
 
 
-def _load_cache_index():
-    if not CACHE_INDEX_PATH.exists():
-        return {}
-    try:
-        with open(CACHE_INDEX_PATH, "r", encoding="utf-8") as file:
-            return json.load(file)
-    except (OSError, json.JSONDecodeError):
-        return {}
+def _append_profile_blocks(blocks, config):
+    profile = _profile_from_config(config)
+    focus = build_worker_focus_block("topic", profile)
+    if focus:
+        blocks.append(focus)
 
-
-def _save_cache_index(index):
-    CACHE_INDEX_PATH.parent.mkdir(parents=True, exist_ok=True)
-    with open(CACHE_INDEX_PATH, "w", encoding="utf-8") as file:
-        json.dump(index, file, ensure_ascii=False, indent=2)
-
-
-def _cache_key(model_name, context):
-    payload = f"{model_name}\n{context}".encode("utf-8")
-    return hashlib.sha256(payload).hexdigest()
-
-
-def _is_cache_metadata_usable(cache):
-    expire_time = getattr(cache, "expire_time", None) or getattr(cache, "expireTime", None)
-    if not expire_time:
-        return True
-    if isinstance(expire_time, str):
-        try:
-            expire_time = datetime.fromisoformat(expire_time.replace("Z", "+00:00"))
-        except ValueError:
-            return True
-    if expire_time.tzinfo is None:
-        expire_time = expire_time.replace(tzinfo=timezone.utc)
-    return expire_time > datetime.now(timezone.utc)
-
-
-def build_profile_cache_context(config):
-    style_content = _clip_context(config.get("style_content"), 12000)
-    dna_content = _clip_context(config.get("dna_content"), 12000)
-    done_content = _clip_context(config.get("done_content"), 10000)
-    context_blocks = []
-
-    if style_content:
-        context_blocks.append(f"""--- CHANNEL STYLE GUIDE ---
-{style_content}
-
-Apply this to topic framing, titles, hooks, and wording. Do not merely mention it.""")
-
-    if dna_content:
-        context_blocks.append(f"""--- CHANNEL DNA ---
-{dna_content}
-
-Use this to match structure, viewer promise, pacing, and angle selection.""")
-
+    done_content = (config.get("done_content") or "").strip()
     if done_content:
-        context_blocks.append(f"""--- PREVIOUS TOPICS / DO NOT DUPLICATE ---
+        blocks.append(
+            f"""--- PREVIOUS TOPICS / DO NOT DUPLICATE ---
 {done_content}
 
-Avoid exact duplicates and near-duplicates. If an idea overlaps, change the lens, case, or tension substantially.""")
-
-    if not context_blocks:
-        return ""
-
-    return "PROFILE CONTEXT FOR THIS CHANNEL\n\n" + "\n\n".join(context_blocks)
-
-
-def get_or_create_profile_cache(client, model_name, context):
-    if not context.strip() or types is None:
-        return None
-
-    key = _cache_key(model_name, context)
-    index = _load_cache_index()
-    cached = index.get(key)
-
-    if cached and cached.get("name"):
-        try:
-            cache = client.caches.get(name=cached["name"])
-            if _is_cache_metadata_usable(cache):
-                client.caches.update(
-                    name=cached["name"],
-                    config=types.UpdateCachedContentConfig(ttl=f"{GEMINI_CACHE_TTL_SECONDS}s")
-                )
-                print(f"✅ [TOPIC_WORKER] Gemini cache HIT: {cached['name']}")
-                return cached["name"]
-        except Exception as error:
-            print(f"⚠️ [TOPIC_WORKER] Cached content invalid, recreating: {error}")
-
-    cache = client.caches.create(
-        model=model_name,
-        config=types.CreateCachedContentConfig(
-            displayName=f"yt-creater-topic-{key[:12]}",
-            contents=context,
-            ttl=f"{GEMINI_CACHE_TTL_SECONDS}s"
+Avoid exact duplicates and near-duplicates. If an idea overlaps, change the lens, case, or tension substantially."""
         )
-    )
-    cache_name = cache.name
-    index[key] = {
-        "name": cache_name,
-        "model": model_name,
-        "display_name": f"yt-creater-topic-{key[:12]}",
-        "context_hash": key,
-        "updated_at": datetime.now(timezone.utc).isoformat()
-    }
-    _save_cache_index(index)
-    print(f"✅ [TOPIC_WORKER] Gemini cache CREATED: {cache_name}")
-    return cache_name
 
 
 def validate_topic_response(data, expected_count):
@@ -216,9 +126,9 @@ def validate_topic_response(data, expected_count):
 
 def build_topic_prompt(config, include_profile_context=True):
     num_topics = config.get('num_topics', '10')
-    lang = config.get('lang', 'Ti?ng Vi?t')
+    lang = config.get('lang', 'Tiếng Việt')
     niche = config.get('niche', 'Unspecified')
-    focus = config.get('focus', 'C?n b?ng')
+    focus = config.get('focus', 'Cân bằng')
     ref_channel = config.get('ref_channel', '').strip() or 'None'
     extra = config.get('extra', '').strip() or 'None'
 
@@ -305,6 +215,15 @@ For every topic, create 3 distinct title options:
 3. Stakes/Consequence title: makes the cost or impact clear.
 Avoid empty clickbait, all-caps, fake urgency, and promises the video cannot deliver.
 
+BAD TOPIC EXAMPLE — NEVER OUTPUT ANYTHING LIKE THIS:
+{{
+  "topic_name": "Bí quyết thành công cho người trẻ",
+  "titles": [{{"text": "5 Cách Thành Công Nhanh", "formula": "Listicle", "score": 95}}],
+  "unique_angle": "Khuyên người xem cố gắng hơn mỗi ngày",
+  "hook_sentence": "Xin chào các bạn, hôm nay mình sẽ chia sẻ..."
+}}
+Why this fails: quá chung chung, không có mâu thuẫn cụ thể, title sáo, hook giống vlog, không gắn đối tượng/đau đớn thật, không có góc khác biệt so với hàng nghìn video tương tự.
+
 SCORING RULES
 - ctr_level: use one of LOW, MEDIUM, HIGH, VERY_HIGH.
 - difficulty_level: use one of EASY, MEDIUM, HARD.
@@ -336,11 +255,22 @@ VALIDATION BEFORE OUTPUT
     blocks = [core_prompt]
 
     if include_profile_context:
-        profile_context = build_profile_cache_context(config)
-        if profile_context:
-            blocks.append(profile_context)
+        _append_profile_blocks(blocks, config)
 
     return "\n\n".join(blocks)
+
+
+def _extract_json(text):
+    raw = (text or "").strip()
+    if not raw:
+        raise ValueError("AI response is empty.")
+    try:
+        return json.loads(raw)
+    except json.JSONDecodeError:
+        json_match = re.search(r"\{.*\}", raw, re.DOTALL)
+        if not json_match:
+            raise ValueError("Model không trả về đúng cấu trúc JSON.")
+        return json.loads(json_match.group(0))
 
 
 class TopicWorker(QThread):
@@ -366,7 +296,7 @@ class TopicWorker(QThread):
         client = genai.Client(api_key=api_key)
 
         try:
-            profile_context = build_profile_cache_context(self.config)
+            profile = _profile_from_config(self.config)
 
             # Danh sách các model theo thứ tự ưu tiên (Fallback Chain)
             model_priority = get_gemini_model_chain()
@@ -381,13 +311,17 @@ class TopicWorker(QThread):
 
                         cached_content_name = None
                         prompt = build_topic_prompt(self.config, include_profile_context=True)
-                        if profile_context:
-                            try:
-                                cached_content_name = get_or_create_profile_cache(client, model_name, profile_context)
-                                if cached_content_name:
-                                    prompt = build_topic_prompt(self.config, include_profile_context=False)
-                            except Exception as cache_error:
-                                print(f"⚠️ [TOPIC_WORKER] Gemini cache unavailable, using full prompt: {cache_error}")
+                        try:
+                            cached_content_name = get_or_create_shared_cache(
+                                client,
+                                model_name,
+                                profile,
+                                log_prefix="TOPIC_WORKER",
+                            )
+                            if cached_content_name:
+                                prompt += channel_context_user_note()
+                        except Exception as cache_error:
+                            print(f"⚠️ [TOPIC_WORKER] Shared cache unavailable: {cache_error}")
 
                         print("\n" + "="*50)
                         if cached_content_name:
@@ -398,8 +332,14 @@ class TopicWorker(QThread):
                         print("="*50 + "\n")
                         
                         request_config = None
-                        if cached_content_name and types is not None:
-                            request_config = types.GenerateContentConfig(cachedContent=cached_content_name)
+                        if types is not None:
+                            gen_kwargs = {
+                                "temperature": 0.75,
+                                "response_mime_type": "application/json",
+                            }
+                            if cached_content_name:
+                                gen_kwargs["cachedContent"] = cached_content_name
+                            request_config = types.GenerateContentConfig(**gen_kwargs)
 
                         response = client.models.generate_content(
                             model=model_name,
@@ -407,8 +347,6 @@ class TopicWorker(QThread):
                             config=request_config
                         )
 
-                        
-                        # Kiểm tra xem có phản hồi hợp lệ không (tránh lỗi Safety filters)
                         if not response.candidates or not response.candidates[0].content.parts:
                             print(f"🛡️ [TOPIC_WORKER] {model_name} BLOCKED by Safety Filters.")
                             raise ValueError(f"Bị chặn bởi bộ lọc an toàn của {model_name}.")
@@ -418,22 +356,14 @@ class TopicWorker(QThread):
                         print(f"📥 [TOPIC_WORKER] RAW RESPONSE FROM {model_name}:")
                         print(raw_text)
                         print("-"*30 + "\n")
-                        
-                        # Regex to extract JSON securely
-                        json_match = re.search(r'\{.*\}', raw_text, re.DOTALL)
-                        if json_match:
-                            clean_json = json_match.group(0)
-                            data = json.loads(clean_json)
-                            data = validate_topic_response(data, self.config.get("num_topics", "10"))
-                            # Nhét thêm tên model vào JSON để UI hiển thị
-                            data["model_used"] = model_name.split("/")[-1]
-                            
-                            print(f"✅ [TOPIC_WORKER] SUCCESS: Valid JSON result from {model_name}")
-                            self.result_signal.emit(json.dumps(data, ensure_ascii=False))
-                            return # Thành công, thoát hàm run
-                        else:
-                            print(f"❌ [TOPIC_WORKER] JSON Pattern not found in {model_name} response.")
-                            raise ValueError(f"Model {model_name} không trả về đúng cấu trúc JSON.")
+
+                        data = _extract_json(raw_text)
+                        data = validate_topic_response(data, self.config.get("num_topics", "10"))
+                        data["model_used"] = model_name.split("/")[-1]
+
+                        print(f"✅ [TOPIC_WORKER] SUCCESS: Valid JSON result from {model_name}")
+                        self.result_signal.emit(json.dumps(data, ensure_ascii=False))
+                        return
 
                     except Exception as e:
                         err_msg = str(e)

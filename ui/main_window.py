@@ -1,5 +1,8 @@
-﻿from PyQt6.QtWidgets import (QApplication, QMainWindow, QWidget, QHBoxLayout, QVBoxLayout,
-                             QPushButton, QLabel, QStackedWidget, QFrame, QButtonGroup, QMessageBox)
+﻿from pathlib import Path
+
+from PyQt6.QtWidgets import (QApplication, QMainWindow, QWidget, QHBoxLayout, QVBoxLayout,
+                             QPushButton, QLabel, QStackedWidget, QFrame, QButtonGroup, QMessageBox,
+                             QFileDialog)
 from PyQt6.QtCore import Qt, pyqtSignal
 
 # Import Äáº¦Y Äá»¦ cÃ¡c mÃ n hÃ¬nh
@@ -57,9 +60,11 @@ class MainWindow(QMainWindow):
 
         sidebar_layout.addSpacing(4) # NÃ©n spacing logo
         sidebar_layout.addWidget(QLabel("PROJECT", styleSheet="font-size: 10px; color: #606075; font-weight: bold; letter-spacing: 1px;"))
-        btn_proj = QPushButton("â€” No project â€”")
-        btn_proj.setStyleSheet("background: #171724; border: 1px solid #252535; color: #E8742A; padding: 8px; border-radius: 8px; text-align: left; padding-left: 12px;")
-        sidebar_layout.addWidget(btn_proj)
+        self.btn_proj = QPushButton("— No project —")
+        self.btn_proj.setStyleSheet("background: #171724; border: 1px solid #252535; color: #E8742A; padding: 8px; border-radius: 8px; text-align: left; padding-left: 12px;")
+        self.btn_proj.setToolTip("Click để quản lý Project")
+        self.btn_proj.clicked.connect(self.open_project_manager)
+        sidebar_layout.addWidget(self.btn_proj)
 
         # ACTIVE PROFILE BOX
         sidebar_layout.addSpacing(16)
@@ -72,7 +77,9 @@ class MainWindow(QMainWindow):
         """)
         prof_lay = QVBoxLayout(self.prof_box)
         prof_lay.addWidget(QLabel("ACTIVE PROFILE", styleSheet="font-size: 10px; color: #E8742A; font-weight: bold; border: none; background: transparent;"))
-        prof_lay.addWidget(QLabel("No profile â€” click to manage", styleSheet="font-size: 12px; color: #E8E8F0; border: none; background: transparent;"))
+        self.lbl_active_profile = QLabel("No profile — click to manage")
+        self.lbl_active_profile.setStyleSheet("font-size: 12px; color: #E8E8F0; border: none; background: transparent;")
+        prof_lay.addWidget(self.lbl_active_profile)
         
         self.prof_box.clicked.connect(self.open_profile_manager)
         sidebar_layout.addWidget(self.prof_box)
@@ -101,9 +108,11 @@ class MainWindow(QMainWindow):
 
         sidebar_layout.addStretch()
         
-        btn_export = QPushButton("â†“ Export Pipeline")
-        btn_export.setStyleSheet("background: rgba(58,214,138,0.1); border: 1px solid rgba(58,214,138,0.25); color: #3AD68A; padding: 12px; border-radius: 8px; text-align: left; font-weight: bold;")
-        sidebar_layout.addWidget(btn_export)
+        self.btn_export = QPushButton("↓ Export Pipeline")
+        self.btn_export.setStyleSheet("background: rgba(58,214,138,0.1); border: 1px solid rgba(58,214,138,0.25); color: #3AD68A; padding: 12px; border-radius: 8px; text-align: left; font-weight: bold;")
+        self.btn_export.setToolTip("Gom script, scenes, prompts, metadata, voice… vào một thư mục")
+        self.btn_export.clicked.connect(self.on_export_pipeline)
+        sidebar_layout.addWidget(self.btn_export)
         
         credit_lay = QHBoxLayout()
         credit_lay.addWidget(QLabel("Credit", styleSheet="font-size: 12px; color: #606075; font-weight: bold;"))
@@ -111,9 +120,10 @@ class MainWindow(QMainWindow):
         credit_lay.addWidget(QLabel("0", styleSheet="color: #E8742A; font-weight: bold; font-size: 14px;"))
         sidebar_layout.addLayout(credit_lay)
         
-        btn_settings = QPushButton("âš™ Settings â€” AI Config")
-        btn_settings.setStyleSheet("background: rgba(232,116,42,0.08); border: 1px solid rgba(232,116,42,0.25); color: #E8742A; padding: 10px; border-radius: 8px; font-weight: bold;")
-        sidebar_layout.addWidget(btn_settings)
+        self.btn_settings = QPushButton("⚙ Settings — AI Config")
+        self.btn_settings.setStyleSheet("background: rgba(232,116,42,0.08); border: 1px solid rgba(232,116,42,0.25); color: #E8742A; padding: 10px; border-radius: 8px; font-weight: bold;")
+        self.btn_settings.clicked.connect(self.open_ai_settings)
+        sidebar_layout.addWidget(self.btn_settings)
 
         main_layout.addWidget(self.sidebar)
         main_layout.addWidget(self.content_area)
@@ -155,9 +165,12 @@ class MainWindow(QMainWindow):
         self.tab_asset.request_load_tool2.connect(self.on_request_load_tool2)
         self.tab_camera.request_load_tool2.connect(self.on_request_load_tool2_camera)
         self.tab_meta.request_load_script.connect(self.on_request_load_script_metadata)
+        self.tab_topic.send_to_script.connect(self.on_send_topic_to_script)
+        self.tab_meta.request_load_chapters_from_voice.connect(self.on_request_load_chapters_from_voice)
 
         # Tá»± Ä‘á»™ng náº¡p profile khi khá»Ÿi Ä‘á»™ng náº¿u Ä‘Ã£ cÃ³ file
         self.load_active_profile()
+        self.load_active_project()
 
     def _apply_adaptive_window_size(self):
         screen = QApplication.primaryScreen()
@@ -191,7 +204,7 @@ class MainWindow(QMainWindow):
     def on_profile_applied(self, data):
         # Cáº­p nháº­t tÃªn Profile lÃªn Sidebar
         name = data.get("name", "Active Profile")
-        self.prof_box.findChildren(QLabel)[1].setText(name.upper())
+        self.lbl_active_profile.setText(name.upper())
         
         # Truyá»n data cho cÃ¡c Tool
         for idx in range(self.content_area.count()):
@@ -199,12 +212,114 @@ class MainWindow(QMainWindow):
             if hasattr(tool, 'apply_profile'):
                 tool.apply_profile(data)
 
+    def open_ai_settings(self):
+        from ui.dialog_settings import AISettingsDialog
+        dialog = AISettingsDialog(self)
+        dialog.exec()
+
+    def open_project_manager(self):
+        from ui.dialog_project import ProjectManagerDialog
+        dialog = ProjectManagerDialog(self, self)
+        dialog.exec()
+
+    def load_active_project(self):
+        from core.project_store import load_active_project, restore_project_to_main_window
+        project = load_active_project()
+        if project:
+            restore_project_to_main_window(self, project)
+
+    def _open_folder(self, path):
+        import os
+        import subprocess
+        import sys
+        target = str(path)
+        if sys.platform == "win32":
+            os.startfile(target)
+        elif sys.platform == "darwin":
+            subprocess.run(["open", target], check=False)
+        else:
+            subprocess.run(["xdg-open", target], check=False)
+
     def open_profile_manager(self):
         if self.nav_group.checkedButton():
             self.nav_group.setExclusive(False)
             self.nav_group.checkedButton().setChecked(False)
             self.nav_group.setExclusive(True)
         self.content_area.setCurrentWidget(self.page_profile)
+
+    def on_export_pipeline(self):
+        from core.pipeline_export import export_pipeline
+        from core.profile_store import PROJECT_ROOT
+
+        default_parent = PROJECT_ROOT / "outputs" / "pipeline"
+        default_parent.mkdir(parents=True, exist_ok=True)
+        parent = QFileDialog.getExistingDirectory(
+            self,
+            "Chọn thư mục lưu Export Pipeline",
+            str(default_parent),
+        )
+        if not parent:
+            return
+
+        try:
+            result = export_pipeline(self, Path(parent))
+        except Exception as exc:
+            QMessageBox.critical(self, "Export thất bại", f"Không thể export pipeline:\n{exc}")
+            return
+
+        from core.project_store import save_active_project, restore_project_to_main_window
+        project = save_active_project(self, export_dir=str(result.export_dir))
+        restore_project_to_main_window(self, project)
+
+        folder_name = result.export_dir.name
+        if len(folder_name) > 28:
+            folder_name = folder_name[:25] + "..."
+        self.btn_proj.setText(folder_name)
+        self.btn_proj.setToolTip(str(result.export_dir))
+
+        meta_files = {"profile_summary.json", "manifest.json"}
+        meaningful_files = [f for f in result.files_written if f not in meta_files]
+        written = len(meaningful_files)
+        copied = len(result.dirs_copied)
+        skipped = "\n".join(f"• {item}" for item in result.skipped[:8]) if result.skipped else "Không có"
+        if len(result.skipped) > 8:
+            skipped += f"\n• ... và {len(result.skipped) - 8} mục khác"
+
+        if not meaningful_files and not result.dirs_copied:
+            QMessageBox.warning(
+                self,
+                "Export gần như trống",
+                f"Đã tạo thư mục:\n{result.export_dir}\n\n"
+                "Chưa có script, scenes, metadata… trong các Tool.\n"
+                "Hãy làm ít nhất Tool 1 (Script) rồi export lại.",
+            )
+            return
+
+        reply = QMessageBox.question(
+            self,
+            "Export Pipeline xong",
+            f"Đã export vào:\n{result.export_dir}\n\n"
+            f"• {written} file nội dung\n"
+            f"• {copied} thư mục media (voice / glabs)\n\n"
+            f"Bỏ qua / trống:\n{skipped}\n\n"
+            f"Mở thư mục ngay?",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+        )
+        if reply == QMessageBox.StandardButton.Yes:
+            self._open_folder(result.export_dir)
+
+    def on_send_topic_to_script(self, payload):
+        self.tab_script.load_topic_from_tool0(payload)
+        self.content_area.setCurrentIndex(1)
+        self.nav_group.button(1).setChecked(True)
+        subtitle = (payload.get("selected_subtitle") or "").strip()
+        QMessageBox.information(
+            self,
+            "Đã chuyển sang Tool 1",
+            f"Đã nạp title phụ vào Script Writer.\n\n"
+            f"Title: {subtitle or '(chưa chọn)'}\n\n"
+            f"Bước tiếp: Research → Write Script.",
+        )
 
     def on_transfer_to_tool3(self, chars, bgs, prescan_data=None):
         self.tab_asset.load_assets_data(chars, bgs, prescan_data)
@@ -218,6 +333,17 @@ class MainWindow(QMainWindow):
             return
         self.tab_camera.load_data(scene_data)
         QMessageBox.information(self, "Loaded", f"Loaded {len(scene_data)} scenes from Tool 2.")
+
+    def on_request_load_chapters_from_voice(self):
+        srt_path = getattr(self.tab_voice, "last_subtitle_path", "")
+        if not srt_path:
+            QMessageBox.warning(
+                self,
+                "Chưa có SRT",
+                "Tool 9 chưa tạo file SRT. Hãy generate voice trước.",
+            )
+            return
+        self.tab_meta.load_chapters_from_srt(srt_path)
 
     def on_request_load_script_metadata(self):
         script = self.tab_script.txt_output.toPlainText().strip()
@@ -233,8 +359,8 @@ class MainWindow(QMainWindow):
         chars = self.tab_scene.txt_prescan_chars.toPlainText().strip()
         bgs = self.tab_scene.txt_prescan_bgs.toPlainText().strip()
         if not chars and not bgs:
-            QMessageBox.warning(self, "Trá»‘ng", "BÃªn Tool 2 hiá»‡n chÆ°a cÃ³ dá»¯ liá»‡u Characters/Backgrounds (Pre-scan)!")
+            QMessageBox.warning(self, "Trống", "Bên Tool 2 hiện chưa có dữ liệu Characters/Backgrounds (Pre-scan)!")
             return
         self.tab_asset.load_assets_data(chars, bgs, self.tab_scene._prescan_data)
-        QMessageBox.information(self, "ThÃ nh cÃ´ng", "ÄÃ£ náº¡p danh sÃ¡ch Characters vÃ  Backgrounds tá»« Tool 2!")
+        QMessageBox.information(self, "Thành công", "Đã nạp danh sách Characters và Backgrounds từ Tool 2!")
 

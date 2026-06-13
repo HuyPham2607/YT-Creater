@@ -1,3 +1,4 @@
+import json
 import os
 from pathlib import Path
 try:
@@ -9,6 +10,12 @@ except ImportError:
 from dotenv import load_dotenv
 from PyQt6.QtCore import QThread, pyqtSignal
 from threads.gemini_retry import generate_content_with_retries
+from core.profile_context import (
+    build_worker_focus_block,
+    channel_context_user_note,
+    get_or_create_shared_cache,
+    worker_channel_fields,
+)
 
 env_path = Path(__file__).parent.parent / '.env'
 load_dotenv(dotenv_path=env_path)
@@ -87,132 +94,87 @@ def build_research_prompt(config: dict) -> tuple[str, str]:
     strategy_block = _research_strategy_block(strategy)
 
     system_prompt = """You are a professional research analyst and fact-checker for a YouTube content team.
-Your job is to gather, organise, and present verified factual data that a scriptwriter will use to write an accurate, credible video script.
+Gather verified factual data for a scriptwriter. Do NOT write script dialogue.
 
-RESEARCH RULES:
-1. Prioritise SPECIFIC data: exact percentages, years, named institutions, named studies.
-2. Flag any data point you are not fully certain about with ⚠️
-3. Do NOT write any script content — only structured research notes.
-4. Separate facts into clear labelled clusters.
-5. Keep language neutral and factual — no editorialising.
-6. Output must be in the language specified by the creator."""
+RULES:
+1. Use specific data: percentages, years, named institutions/studies when possible.
+2. Mark uncertain facts with ⚠️
+3. Neutral tone. No editorialising.
+4. Write research_notes in the creator's requested language.
 
-    user_prompt = f"""Conduct research for a YouTube video script on the following topic.
+Return ONLY JSON: {"research_notes": "<markdown>"}
 
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-RESEARCH REQUEST
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-- Topic          : {topic}
-- Output language: {lang}
-- Script length  : ~{target_words} words / {target_mins} minutes
-- Script structure: {structure}
-- Structure focus: {structure_hint}{extra_block}{strategy_block}
-
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-RESEARCH SCOPE — COVER ALL OF THESE
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-1. CORE STATISTICS & DATA
-   - Quantitative facts directly relevant to the topic
-   - Source type (government report / academic study / industry survey)
-   - Year of data
-
-2. ROOT CAUSES & MECHANISMS
-   - WHY this phenomenon exists — the underlying systems or behaviours
-   - Any expert consensus or widely-cited explanations
-
-3. REAL-WORLD EXAMPLES & CASE STUDIES
-   - Specific named examples (people, companies, countries, events)
-   - What happened and what it illustrates about the topic
-
-4. COMMON MISCONCEPTIONS
-   - What most people believe that is partially or fully wrong
-   - What the data actually shows
-
-5. COUNTERARGUMENTS & NUANCE
-   - The strongest objection to the main thesis
-   - Data that complicates the simple narrative
-
-6. NAMED ENTITIES (for fact accuracy)
-   - Key organisations, laws, reports, or studies the script might reference
-   - Correct names and basic descriptions
-
-7. VALIDATION FOR SCRIPT STRATEGY
-   - Which parts of the Topic Ideator angle are well-supported
-   - Which claims need hedging or should be avoided
-   - What evidence can support the hook, retention loops, and final conclusion
-
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-REQUIRED OUTPUT FORMAT — FOLLOW EXACTLY
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+Inside research_notes, use EXACTLY these 7 sections (markdown headings + bullets):
 
 ## RESEARCH NOTES — [TOPIC IN CAPS]
-{topic.upper()}
+**Searches conducted:** [N] | **Confidence:** High/Medium/Low — [reason]
 
----
+### 1. CORE STATISTICS & DATA
+- **[Label]:** [data]. *(Source type, Year)* | ⚠️ if uncertain
 
-**Searches conducted:** [N searches]
-**Confidence level:** [High / Medium / Low — one line explanation]
+### 2. ROOT CAUSES & MECHANISMS
+- **[Mechanism]:** [1-2 sentences]
 
----
+### 3. REAL-WORLD EXAMPLES & CASE STUDIES
+- **[Name/Event]:** [what happened + what it illustrates, 2-3 sentences]
 
-### 📊 1. CORE STATISTICS & DATA
+### 4. COMMON MISCONCEPTIONS
+- **Myth:** ... **Reality:** ...
 
-- **[Fact label]:** [Specific data point]. *(Source type, Year)*
-- **[Fact label]:** [Specific data point]. *(Source type, Year)*
-⚠️ **[Uncertain fact label]:** [Data point — flagged because source unclear or old]
+### 5. COUNTERARGUMENTS & NUANCE
+- [strongest objection + data] | [complicating nuance]
 
----
+### 6. NAMED ENTITIES
+- **[Entity]:** [one-line relevance]
 
-### 🔍 2. ROOT CAUSES & MECHANISMS
+### 7. STRATEGY VALIDATION NOTES
+- **Supported angle:** | **Needs hedging:** | **Avoid saying:** | **Best evidence for hook:**
 
-- **[Mechanism name]:** [Explanation in 1-2 sentences]
-- **[Mechanism name]:** [Explanation in 1-2 sentences]
+End with: Research notes are preliminary — verify ⚠️ facts before scripting."""
 
----
+    user_prompt = f"""Research this YouTube video topic.
 
-### 🧪 3. REAL-WORLD EXAMPLES & CASE STUDIES
+REQUEST
+- Topic: {topic}
+- Language: {lang}
+- Script: ~{target_words} words / {target_mins} min
+- Structure: {structure}
+- Focus: {structure_hint}{extra_block}{strategy_block}
 
-- **[Name/Event]:** [What happened + what it illustrates — 2-3 sentences]
-- **[Name/Event]:** [What happened + what it illustrates — 2-3 sentences]
-
----
-
-### ❌ 4. COMMON MISCONCEPTIONS
-
-- **Myth:** [What people believe]
-  **Reality:** [What data shows]
-
----
-
-### ⚖️ 5. COUNTERARGUMENTS & NUANCE
-
-- [Strongest objection + supporting data in 2 sentences]
-- [Complicating nuance in 2 sentences]
-
----
-
-### 🏷️ 6. NAMED ENTITIES
-
-- **[Entity name]:** [One-line description — what it is and why relevant]
-
----
-
-### ✅ 7. STRATEGY VALIDATION NOTES
-
-- **Supported angle:** [Which parts of the Topic Ideator angle are supported by available evidence]
-- **Needs hedging:** [Which parts need softer wording or caveats]
-- **Avoid saying:** [Claims that would be too broad, unsupported, or misleading]
-- **Best evidence for hook:** [1-2 strongest evidence points the script should use early]
-
----
-
-⚠️ **Research notes là preliminary** — AI đã cross-check nhiều nguồn nhưng vẫn có thể sai. Fact có ⚠️ marker cần kiểm chứng lại trước khi viết.
-💡 **Tip:** Kiểm tra research trước khi bấm Viết Script. Sau khi viết xong, vẫn nên sửa research rồi viết lại nếu cần.
-
----
-[Research completed. Ready for script generation.]"""
+MUST RESEARCH ALL 7 AREAS (do not skip any):
+1. Statistics — numbers, source type, year
+2. Root causes — why it happens, expert consensus
+3. Case studies — named examples + what they prove
+4. Misconceptions — myth vs reality
+5. Counterarguments — strongest objection + nuance
+6. Named entities — orgs, laws, reports, studies (correct names)
+7. Strategy validation — what angle is supported, what to hedge, what to avoid, best hook evidence"""
 
     return system_prompt, user_prompt
+
+
+def _profile_from_config(config: dict) -> dict:
+    profile = dict(config.get("profile_data") or {})
+    for key in ("dna_content", "style_content", "name", "niche", "lang"):
+        if config.get(key):
+            profile[key] = config.get(key)
+    return profile
+
+
+def _parse_research_response(text: str) -> str:
+    raw = (text or "").strip()
+    if not raw:
+        raise ValueError("AI response is empty.")
+    try:
+        data = json.loads(raw)
+        if isinstance(data, dict):
+            for key in ("research_notes", "notes", "research", "content"):
+                value = data.get(key)
+                if isinstance(value, str) and value.strip():
+                    return value.strip()
+    except json.JSONDecodeError:
+        pass
+    return raw
 
 
 # ============================================================
@@ -246,24 +208,48 @@ class ResearchWorker(QThread):
         try:
             self.progress_signal.emit("🔍 Đang research thông tin...")
 
+            profile = _profile_from_config(self.config)
+            channel_fields = worker_channel_fields("research", profile)
+            if channel_fields.get("dna_content") and not self.config.get("dna_content"):
+                self.config["dna_content"] = channel_fields["dna_content"]
+            worker_focus = build_worker_focus_block("research", profile)
+
             system_prompt, user_prompt = build_research_prompt(self.config)
 
-            gen_config = types.GenerateContentConfig(
-                system_instruction=system_prompt,
-                temperature=0.3   # Lower temp for factual research
-            )
+            def build_request(model_name):
+                cached_name = None
+                try:
+                    cached_name = get_or_create_shared_cache(
+                        client, model_name, profile, log_prefix="RESEARCH_WORKER",
+                    )
+                except Exception as cache_error:
+                    print(f"⚠️ [RESEARCH_WORKER] Shared cache unavailable: {cache_error}")
+                prompt = user_prompt
+                if worker_focus and not cached_name:
+                    prompt = f"{worker_focus}\n\n{prompt}"
+                if cached_name:
+                    prompt += channel_context_user_note()
+                gen_kwargs = {
+                    "system_instruction": system_prompt,
+                    "temperature": float(self.config.get("temperature", 0.3)),
+                    "response_mime_type": "application/json",
+                }
+                if cached_name:
+                    gen_kwargs["cachedContent"] = cached_name
+                return {
+                    "contents": prompt,
+                    "config": types.GenerateContentConfig(**gen_kwargs),
+                }
 
             response, model_used = generate_content_with_retries(
                 client=client,
-                build_request=lambda model_name: {
-                    "contents": user_prompt,
-                    "config": gen_config,
-                },
+                build_request=build_request,
                 progress_callback=self.progress_signal.emit,
                 log_prefix="RESEARCH_WORKER",
             )
 
-            self.research_signal.emit(response.text)
+            notes = _parse_research_response(response.text)
+            self.research_signal.emit(notes)
             self.progress_signal.emit(f"✅ Research xong bằng {model_used} — kiểm tra rồi bấm Viết Script")
 
         except Exception as e:

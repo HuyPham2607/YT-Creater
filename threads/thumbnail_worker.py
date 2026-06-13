@@ -13,6 +13,11 @@ except ImportError:
     types = None
 
 from threads.gemini_retry import generate_content_with_retries
+from core.profile_context import (
+    build_worker_focus_block,
+    channel_context_user_note,
+    get_or_create_shared_cache,
+)
 
 load_dotenv()
 
@@ -27,13 +32,6 @@ Rules:
 4. Respect the channel thumbnail rules, visual DNA, palette, character identity, and forbidden visuals.
 5. Return ONLY valid JSON. No markdown, no explanation outside JSON.
 """
-
-
-def _clip(text, limit=8000):
-    text = (text or "").strip()
-    if len(text) <= limit:
-        return text
-    return text[:limit] + "\n...[TRUNCATED]..."
 
 
 def _extract_json(text):
@@ -112,11 +110,8 @@ Niche:
 Visual style:
 {config.get("visual") or "Not provided"}
 
-Thumbnail/channel rules from DNA and style guide:
-{_clip(config.get("thumbnail_rules") or config.get("dna_content") or "")}
-
-Style guide:
-{_clip(config.get("style_guide") or "")}
+Worker focus (thumbnail rules):
+{config.get("worker_focus") or build_worker_focus_block("thumbnail", config)}
 
 === USER CONTROLS ===
 Thumbnail format:
@@ -160,18 +155,43 @@ class ThumbnailWorker(QThread):
                 raise ValueError("GEMINI_API_KEY not found in .env.")
 
             client = genai.Client(api_key=api_key)
-            gen_config = types.GenerateContentConfig(
-                system_instruction=THUMBNAIL_SYSTEM,
-                temperature=0.75,
-                response_mime_type="application/json",
-            )
-            user_prompt = build_thumbnail_prompt(self.config)
+            profile = {
+                "dna_content": self.config.get("dna_content", ""),
+                "style_content": self.config.get("style_guide") or self.config.get("style_content", ""),
+            }
+            self.config["worker_focus"] = build_worker_focus_block("thumbnail", profile)
+
+            def build_thumbnail_request(model_name):
+                cached_name = None
+                try:
+                    cached_name = get_or_create_shared_cache(
+                        client,
+                        model_name,
+                        profile,
+                        log_prefix="THUMBNAIL",
+                    )
+                except Exception as cache_error:
+                    print(f"⚠️ [THUMBNAIL] Shared cache unavailable: {cache_error}")
+
+                user_prompt = build_thumbnail_prompt(self.config)
+                if cached_name:
+                    user_prompt += channel_context_user_note()
+
+                gen_kwargs = {
+                    "system_instruction": THUMBNAIL_SYSTEM,
+                    "temperature": 0.75,
+                    "response_mime_type": "application/json",
+                }
+                if cached_name:
+                    gen_kwargs["cachedContent"] = cached_name
+                return {
+                    "contents": user_prompt,
+                    "config": types.GenerateContentConfig(**gen_kwargs),
+                }
+
             response, _ = generate_content_with_retries(
                 client=client,
-                build_request=lambda model_name: {
-                    "contents": user_prompt,
-                    "config": gen_config,
-                },
+                build_request=build_thumbnail_request,
                 progress_callback=self.progress_signal.emit,
                 log_prefix="THUMBNAIL",
             )
